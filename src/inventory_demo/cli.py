@@ -1,12 +1,11 @@
 """CLI for Inventory Demo database management."""
 
+import psycopg
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from sqlalchemy import text
 
-from inventory_demo.config import get_settings
-from inventory_demo.db.postgres import PostgresDB
+from inventory_demo.config import get_settings, _token_manager
 
 app = typer.Typer(
     name="inventory-demo",
@@ -14,6 +13,23 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+def get_local_connection() -> psycopg.Connection:
+    """Get a database connection using local credentials."""
+    settings = get_settings()
+    token = _token_manager.get_token(
+        instance_name=settings.lakebase.instance_name,
+        workspace_host=settings.databricks.host,
+    )
+    return psycopg.connect(
+        host=settings.lakebase.host,
+        port=5432,
+        dbname=settings.lakebase.database,
+        user=settings.lakebase.user,
+        password=token,
+        sslmode="require",
+    )
 
 
 @app.command()
@@ -94,13 +110,16 @@ GROUP BY item_id;
     console.print("\n[blue]Initializing database tables...[/blue]")
 
     try:
-        db = PostgresDB()
-        with db.session() as session:
-            # Execute each statement separately
-            for statement in init_sql.split(';'):
-                statement = statement.strip()
-                if statement:
-                    session.execute(text(statement))
+        conn = get_local_connection()
+        cur = conn.cursor()
+        # Execute each statement separately
+        for statement in init_sql.split(';'):
+            statement = statement.strip()
+            if statement:
+                cur.execute(statement)
+        conn.commit()
+        cur.close()
+        conn.close()
 
         console.print("[green]✓ Database tables initialized successfully![/green]")
     except Exception as e:
@@ -123,7 +142,8 @@ def clear_db(
 
     if not force:
         confirm = typer.confirm(
-            "\n⚠️  This will DELETE ALL DATA from scan_events and replenishment_signals. Continue?"
+            "\n⚠️  This will DELETE ALL DATA from scan_events and "
+            "replenishment_signals. Continue?"
         )
         if not confirm:
             console.print("[yellow]Aborted.[/yellow]")
@@ -132,11 +152,14 @@ def clear_db(
     console.print("\n[blue]Clearing database tables...[/blue]")
 
     try:
-        db = PostgresDB()
-        with db.session() as session:
-            # Delete in order to respect foreign key constraints
-            session.execute(text("DELETE FROM replenishment_signals"))
-            session.execute(text("DELETE FROM scan_events"))
+        conn = get_local_connection()
+        cur = conn.cursor()
+        # Delete in order to respect foreign key constraints
+        cur.execute("DELETE FROM replenishment_signals")
+        cur.execute("DELETE FROM scan_events")
+        conn.commit()
+        cur.close()
+        conn.close()
 
         console.print("[green]✓ All data cleared successfully![/green]")
     except Exception as e:
@@ -158,30 +181,105 @@ def migrate():
     console.print("\n[blue]Checking for pending migrations...[/blue]")
 
     try:
-        db = PostgresDB()
+        conn = get_local_connection()
+        cur = conn.cursor()
 
         # Check if user_email column exists
-        with db.session() as session:
-            result = session.execute(text("""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = 'scan_events' AND column_name = 'user_email'
-            """))
-            has_user_email = result.fetchone() is not None
+        cur.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'scan_events' AND column_name = 'user_email'
+        """)
+        has_user_email = cur.fetchone() is not None
 
         if has_user_email:
-            console.print("[green]✓ No migrations needed - database is up to date[/green]")
+            console.print(
+                "[green]✓ No migrations needed - database is up to date[/green]"
+            )
+            cur.close()
+            conn.close()
             return
 
         console.print("[yellow]  Adding user_email column to scan_events...[/yellow]")
-
-        with db.session() as session:
-            session.execute(text("ALTER TABLE scan_events ADD COLUMN user_email TEXT"))
+        cur.execute("ALTER TABLE scan_events ADD COLUMN user_email TEXT")
+        conn.commit()
+        cur.close()
+        conn.close()
 
         console.print("[green]✓ Migration completed successfully![/green]")
 
     except Exception as e:
         console.print(f"[red]✗ Error running migration: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def grant_app_access(
+    app_name: str = typer.Argument(
+        "inventory-demo-dev",
+        help="Name of the Databricks App to grant access to"
+    ),
+):
+    """Grant table access to a Databricks App's service principal.
+
+    After deploying to Databricks Apps, the app runs as its own service
+    principal which needs permissions on the tables.
+    """
+    import subprocess
+    import json
+
+    settings = get_settings()
+    console.print(Panel.fit(
+        f"[bold]Database:[/bold] {settings.lakebase.database}\n"
+        f"[bold]Host:[/bold] {settings.lakebase.host}",
+        title="Lakebase Connection",
+    ))
+
+    console.print(f"\n[blue]Getting service principal for app: {app_name}...[/blue]")
+
+    # Get the app's service principal ID
+    try:
+        result = subprocess.run(
+            ["databricks", "apps", "get", app_name, "--output", "json"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        app_info = json.loads(result.stdout)
+        sp_id = app_info.get("service_principal_client_id")
+
+        if not sp_id:
+            console.print("[red]✗ Could not find service principal ID for app[/red]")
+            raise typer.Exit(1)
+
+        console.print(f"  Service Principal: [cyan]{sp_id}[/cyan]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]✗ Error getting app info: {e.stderr}[/red]")
+        raise typer.Exit(1)
+    except json.JSONDecodeError:
+        console.print("[red]✗ Error parsing app info[/red]")
+        raise typer.Exit(1)
+
+    console.print("\n[blue]Granting table permissions...[/blue]")
+
+    try:
+        conn = get_local_connection()
+        cur = conn.cursor()
+
+        cur.execute(f'GRANT ALL ON scan_events TO "{sp_id}"')
+        cur.execute(f'GRANT ALL ON replenishment_signals TO "{sp_id}"')
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        console.print("[green]✓ Permissions granted successfully![/green]")
+        console.print(f"\n  The app [cyan]{app_name}[/cyan] now has access to:")
+        console.print("    • scan_events")
+        console.print("    • replenishment_signals")
+
+    except Exception as e:
+        console.print(f"[red]✗ Error granting permissions: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -201,28 +299,31 @@ def status():
     console.print("\n[blue]Checking database connection...[/blue]")
 
     try:
-        db = PostgresDB()
-        if not db.health_check():
-            console.print("[red]✗ Database connection failed[/red]")
-            raise typer.Exit(1)
-
+        conn = get_local_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
         console.print("[green]✓ Database connected[/green]\n")
 
         # Get table counts
-        with db.session() as session:
-            events_count = session.execute(
-                text("SELECT COUNT(*) FROM scan_events")
-            ).scalar()
-            signals_count = session.execute(
-                text("SELECT COUNT(*) FROM replenishment_signals")
-            ).scalar()
-            open_signals = session.execute(
-                text("SELECT COUNT(*) FROM replenishment_signals WHERE status = 'OPEN'")
-            ).scalar()
+        cur.execute("SELECT COUNT(*) FROM scan_events")
+        events_count = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM replenishment_signals")
+        signals_count = cur.fetchone()[0]
+
+        cur.execute(
+            "SELECT COUNT(*) FROM replenishment_signals WHERE status = 'OPEN'"
+        )
+        open_signals = cur.fetchone()[0]
+
+        cur.close()
+        conn.close()
 
         console.print("[bold]Table Statistics:[/bold]")
         console.print(f"  scan_events: {events_count} rows")
-        console.print(f"  replenishment_signals: {signals_count} rows ({open_signals} open)")
+        console.print(
+            f"  replenishment_signals: {signals_count} rows ({open_signals} open)"
+        )
 
     except Exception as e:
         console.print(f"[red]✗ Error: {e}[/red]")

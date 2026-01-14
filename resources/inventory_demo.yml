@@ -5,6 +5,10 @@ resources:
       description: Barcode-based inventory intake & consumption demo
       source_code_path: ../
 
+      # API scopes for database credential generation
+      user_api_scopes:
+        - sql
+
       # Lakebase database resource
       resources:
         - name: lakebase

@@ -2,66 +2,149 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
-from datetime import datetime
 from typing import Generator
 from uuid import UUID
 
+import psycopg
 import structlog
-from sqlalchemy import case, create_engine, func, select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
 
-from inventory_demo.config import get_settings
-from inventory_demo.db.schemas import Base, ReplenishmentSignal, ScanEvent
+from inventory_demo.db.schemas import ReplenishmentSignal, ScanEvent
 
 logger = structlog.get_logger()
 
 
-class PostgresDB:
-    """PostgreSQL database client using SQLAlchemy."""
+class LakebaseConnectionFactory:
+    """Factory for creating Lakebase connections with OAuth authentication."""
 
-    def __init__(self, connection_string: str | None = None):
-        """Initialize database connection.
+    def __init__(self):
+        """Initialize connection factory.
 
-        Args:
-            connection_string: SQLAlchemy connection string. If None, uses settings.
+        In Databricks Apps:
+        - PGHOST and PGDATABASE are automatically set
+        - Service principal credentials are injected
         """
-        if connection_string is None:
-            settings = get_settings()
-            connection_string = settings.lakebase.connection_string
+        try:
+            from databricks.sdk import WorkspaceClient
+            from databricks.sdk.core import Config
 
-        self._engine = create_engine(
-            connection_string,
-            pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=10,
-        )
-        self._session_factory = sessionmaker(bind=self._engine)
+            self._config = Config()
+            self._workspace_client = WorkspaceClient()
+
+            # In Databricks Apps, use service principal client_id as username
+            self._postgres_username = self._config.client_id
+            self._postgres_host = os.getenv("PGHOST")
+            self._postgres_database = os.getenv("PGDATABASE", "databricks_postgres")
+            self._use_databricks_auth = True
+
+            logger.info(
+                "lakebase_factory_initialized",
+                host=self._postgres_host,
+                database=self._postgres_database,
+                username=self._postgres_username,
+                auth="databricks_oauth",
+            )
+
+        except Exception as e:
+            logger.warning("databricks_sdk_not_available", error=str(e))
+            self._use_databricks_auth = False
+
+            # Fall back to local development settings
+            from inventory_demo.config import get_settings
+
+            settings = get_settings()
+            self._postgres_host = settings.lakebase.host
+            self._postgres_database = settings.lakebase.database
+            self._postgres_username = settings.lakebase.user
+            self._local_settings = settings
+
+            logger.info(
+                "lakebase_factory_initialized",
+                host=self._postgres_host,
+                database=self._postgres_database,
+                auth="local",
+            )
+
+    def get_connection(self) -> psycopg.Connection:
+        """Get a new database connection with fresh OAuth token."""
+        if self._use_databricks_auth:
+            token = self._workspace_client.config.oauth_token().access_token
+
+            return psycopg.connect(
+                host=self._postgres_host,
+                port=5432,
+                dbname=self._postgres_database,
+                user=self._postgres_username,
+                password=token,
+                sslmode="require",
+            )
+        else:
+            # Local development with OAuth token from Databricks SDK
+            from inventory_demo.config import _token_manager
+
+            token = _token_manager.get_token(
+                instance_name=self._local_settings.lakebase.instance_name,
+                workspace_host=self._local_settings.databricks.host,
+            )
+
+            return psycopg.connect(
+                host=self._postgres_host,
+                port=5432,
+                dbname=self._postgres_database,
+                user=self._postgres_username,
+                password=token,
+                sslmode="require",
+            )
+
+    def get_connection_string(self) -> str:
+        """Get SQLAlchemy connection string (for local dev only)."""
+        if self._use_databricks_auth:
+            raise RuntimeError(
+                "Cannot use connection string with Databricks OAuth. "
+                "Use get_connection() instead."
+            )
+        return self._local_settings.lakebase.connection_string
+
+
+# Global connection factory
+_factory: LakebaseConnectionFactory | None = None
+
+
+def get_factory() -> LakebaseConnectionFactory:
+    """Get the global connection factory."""
+    global _factory
+    if _factory is None:
+        _factory = LakebaseConnectionFactory()
+    return _factory
+
+
+class PostgresDB:
+    """PostgreSQL database client using psycopg with OAuth."""
+
+    def __init__(self):
+        """Initialize database client."""
+        self._factory = get_factory()
 
     @contextmanager
-    def session(self) -> Generator[Session, None, None]:
-        """Get a database session context manager."""
-        session = self._session_factory()
+    def session(self) -> Generator[psycopg.Connection, None, None]:
+        """Get a database connection context manager."""
+        conn = self._factory.get_connection()
         try:
-            yield session
-            session.commit()
+            yield conn
+            conn.commit()
         except Exception:
-            session.rollback()
+            conn.rollback()
             raise
         finally:
-            session.close()
-
-    def create_tables(self) -> None:
-        """Create all tables if they don't exist."""
-        Base.metadata.create_all(self._engine)
-        logger.info("database_tables_created")
+            conn.close()
 
     def health_check(self) -> bool:
         """Check database connectivity."""
         try:
-            with self.session() as session:
-                session.execute(text("SELECT 1"))
+            with self.session() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
             return True
         except Exception as e:
             logger.error("database_health_check_failed", error=str(e))
@@ -79,94 +162,134 @@ class PostgresDB:
         user_email: str | None = None,
     ) -> ScanEvent:
         """Create a new scan event."""
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO scan_events
+                        (event_type, station_id, barcode_raw, item_id, qty, user_email)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING event_id, event_ts, event_type, station_id,
+                              barcode_raw, item_id, qty, user_email
+                    """,
+                    (event_type, station_id, barcode_raw, item_id, qty, user_email),
+                )
+                row = cur.fetchone()
+
+        # Create ScanEvent object from row
         event = ScanEvent(
-            event_type=event_type,
-            station_id=station_id,
-            barcode_raw=barcode_raw,
-            item_id=item_id,
-            qty=qty,
-            user_email=user_email,
+            event_type=row[2],
+            station_id=row[3],
+            barcode_raw=row[4],
+            item_id=row[5],
+            qty=row[6],
+            user_email=row[7],
         )
-        with self.session() as session:
-            session.add(event)
-            session.flush()
-            # Refresh to get generated values
-            session.refresh(event)
-            # Detach from session before returning
-            session.expunge(event)
+        event.event_id = row[0]
+        event.event_ts = row[1]
         return event
 
     def get_recent_events(self, limit: int = 20) -> list[ScanEvent]:
         """Get recent scan events ordered by timestamp desc."""
-        with self.session() as session:
-            stmt = select(ScanEvent).order_by(ScanEvent.event_ts.desc()).limit(limit)
-            events = list(session.scalars(stmt).all())
-            # Detach from session
-            for event in events:
-                session.expunge(event)
-            return events
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT event_id, event_ts, event_type, station_id,
+                           barcode_raw, item_id, qty, user_email
+                    FROM scan_events
+                    ORDER BY event_ts DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+
+        events = []
+        for row in rows:
+            event = ScanEvent(
+                event_type=row[2],
+                station_id=row[3],
+                barcode_raw=row[4],
+                item_id=row[5],
+                qty=row[6],
+                user_email=row[7],
+            )
+            event.event_id = row[0]
+            event.event_ts = row[1]
+            events.append(event)
+        return events
 
     # Inventory operations
 
     def get_inventory_item(self, item_id: str) -> dict | None:
         """Get current inventory for a specific item."""
-        with self.session() as session:
-            stmt = select(
-                ScanEvent.item_id,
-                func.sum(
-                    case((ScanEvent.event_type == "INTAKE", ScanEvent.qty), else_=0)
-                ).label("intake_total"),
-                func.sum(
-                    case((ScanEvent.event_type == "CONSUME", ScanEvent.qty), else_=0)
-                ).label("consume_total"),
-                func.max(ScanEvent.event_ts).label("last_activity_ts"),
-            ).where(ScanEvent.item_id == item_id).group_by(ScanEvent.item_id)
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        item_id,
+                        COALESCE(SUM(CASE WHEN event_type = 'INTAKE'
+                                     THEN qty ELSE 0 END), 0) AS intake_total,
+                        COALESCE(SUM(CASE WHEN event_type = 'CONSUME'
+                                     THEN qty ELSE 0 END), 0) AS consume_total,
+                        MAX(event_ts) AS last_activity_ts
+                    FROM scan_events
+                    WHERE item_id = %s
+                    GROUP BY item_id
+                    """,
+                    (item_id,),
+                )
+                row = cur.fetchone()
 
-            result = session.execute(stmt).first()
-            if result is None:
-                return None
+        if row is None:
+            return None
 
-            intake = result.intake_total or 0
-            consume = result.consume_total or 0
-            return {
-                "item_id": result.item_id,
-                "intake_total": intake,
-                "consume_total": consume,
-                "on_hand_qty": intake - consume,
-                "last_activity_ts": result.last_activity_ts,
-            }
+        intake = row[1] or 0
+        consume = row[2] or 0
+        return {
+            "item_id": row[0],
+            "intake_total": intake,
+            "consume_total": consume,
+            "on_hand_qty": intake - consume,
+            "last_activity_ts": row[3],
+        }
 
     def get_all_inventory(self, limit: int = 100) -> list[dict]:
         """Get current inventory for all items."""
-        with self.session() as session:
-            stmt = (
-                select(
-                    ScanEvent.item_id,
-                    func.sum(
-                        case((ScanEvent.event_type == "INTAKE", ScanEvent.qty), else_=0)
-                    ).label("intake_total"),
-                    func.sum(
-                        case((ScanEvent.event_type == "CONSUME", ScanEvent.qty), else_=0)
-                    ).label("consume_total"),
-                    func.max(ScanEvent.event_ts).label("last_activity_ts"),
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        item_id,
+                        COALESCE(SUM(CASE WHEN event_type = 'INTAKE'
+                                     THEN qty ELSE 0 END), 0) AS intake_total,
+                        COALESCE(SUM(CASE WHEN event_type = 'CONSUME'
+                                     THEN qty ELSE 0 END), 0) AS consume_total,
+                        MAX(event_ts) AS last_activity_ts
+                    FROM scan_events
+                    GROUP BY item_id
+                    ORDER BY item_id
+                    LIMIT %s
+                    """,
+                    (limit,),
                 )
-                .group_by(ScanEvent.item_id)
-                .order_by(ScanEvent.item_id)
-                .limit(limit)
-            )
+                rows = cur.fetchall()
 
-            results = []
-            for row in session.execute(stmt).all():
-                intake = row.intake_total or 0
-                consume = row.consume_total or 0
-                results.append({
-                    "item_id": row.item_id,
-                    "intake_total": intake,
-                    "consume_total": consume,
-                    "on_hand_qty": intake - consume,
-                    "last_activity_ts": row.last_activity_ts,
-                })
-            return results
+        results = []
+        for row in rows:
+            intake = row[1] or 0
+            consume = row[2] or 0
+            results.append({
+                "item_id": row[0],
+                "intake_total": intake,
+                "consume_total": consume,
+                "on_hand_qty": intake - consume,
+                "last_activity_ts": row[3],
+            })
+        return results
 
     def get_on_hand_qty(self, item_id: str) -> int:
         """Get current on-hand quantity for an item."""
@@ -185,64 +308,136 @@ class PostgresDB:
         reorder_point: int = 10,
         reorder_qty: int = 24,
     ) -> ReplenishmentSignal | None:
-        """Create a replenishment signal if one doesn't already exist for this item.
-
-        Returns None if an OPEN signal already exists for the item.
-        """
-        signal = ReplenishmentSignal(
-            item_id=item_id,
-            current_qty=current_qty,
-            trigger_event_id=trigger_event_id,
-            reorder_point=reorder_point,
-            reorder_qty=reorder_qty,
-            status="OPEN",
-        )
+        """Create a replenishment signal if one doesn't exist for this item."""
         try:
-            with self.session() as session:
-                session.add(signal)
-                session.flush()
-                session.refresh(signal)
-                session.expunge(signal)
-            logger.info("replenishment_signal_created", item_id=item_id, current_qty=current_qty)
+            with self.session() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO replenishment_signals
+                            (item_id, current_qty, trigger_event_id,
+                             reorder_point, reorder_qty, status)
+                        VALUES (%s, %s, %s, %s, %s, 'OPEN')
+                        RETURNING signal_id, created_ts, item_id, current_qty,
+                                  reorder_point, reorder_qty, status
+                        """,
+                        (item_id, current_qty, str(trigger_event_id),
+                         reorder_point, reorder_qty),
+                    )
+                    row = cur.fetchone()
+
+            signal = ReplenishmentSignal(
+                item_id=row[2],
+                current_qty=row[3],
+                reorder_point=row[4],
+                reorder_qty=row[5],
+                status=row[6],
+            )
+            signal.signal_id = row[0]
+            signal.created_ts = row[1]
+            logger.info(
+                "replenishment_signal_created",
+                item_id=item_id,
+                current_qty=current_qty
+            )
             return signal
-        except IntegrityError:
+        except Exception as e:
             # Unique constraint violation - OPEN signal already exists
-            logger.debug("replenishment_signal_exists", item_id=item_id)
+            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+                logger.debug("replenishment_signal_exists", item_id=item_id)
+                return None
+            raise
+
+    def get_signals(
+        self, status: str | None = None, limit: int = 50
+    ) -> list[ReplenishmentSignal]:
+        """Get replenishment signals, optionally filtered by status."""
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                if status:
+                    cur.execute(
+                        """
+                        SELECT signal_id, created_ts, item_id, current_qty,
+                               reorder_point, reorder_qty, status
+                        FROM replenishment_signals
+                        WHERE status = %s
+                        ORDER BY created_ts DESC
+                        LIMIT %s
+                        """,
+                        (status, limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT signal_id, created_ts, item_id, current_qty,
+                               reorder_point, reorder_qty, status
+                        FROM replenishment_signals
+                        ORDER BY created_ts DESC
+                        LIMIT %s
+                        """,
+                        (limit,),
+                    )
+                rows = cur.fetchall()
+
+        signals = []
+        for row in rows:
+            signal = ReplenishmentSignal(
+                item_id=row[2],
+                current_qty=row[3],
+                reorder_point=row[4],
+                reorder_qty=row[5],
+                status=row[6],
+            )
+            signal.signal_id = row[0]
+            signal.created_ts = row[1]
+            signals.append(signal)
+        return signals
+
+    def update_signal_status(
+        self, signal_id: UUID, status: str
+    ) -> ReplenishmentSignal | None:
+        """Update a signal's status."""
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE replenishment_signals
+                    SET status = %s
+                    WHERE signal_id = %s
+                    RETURNING signal_id, created_ts, item_id, current_qty,
+                              reorder_point, reorder_qty, status
+                    """,
+                    (status, str(signal_id)),
+                )
+                row = cur.fetchone()
+
+        if row is None:
             return None
 
-    def get_signals(self, status: str | None = None, limit: int = 50) -> list[ReplenishmentSignal]:
-        """Get replenishment signals, optionally filtered by status."""
-        with self.session() as session:
-            stmt = select(ReplenishmentSignal).order_by(ReplenishmentSignal.created_ts.desc())
-            if status:
-                stmt = stmt.where(ReplenishmentSignal.status == status)
-            stmt = stmt.limit(limit)
-
-            signals = list(session.scalars(stmt).all())
-            for signal in signals:
-                session.expunge(signal)
-            return signals
-
-    def update_signal_status(self, signal_id: UUID, status: str) -> ReplenishmentSignal | None:
-        """Update a signal's status."""
-        with self.session() as session:
-            signal = session.get(ReplenishmentSignal, signal_id)
-            if signal is None:
-                return None
-            signal.status = status
-            session.flush()
-            session.refresh(signal)
-            session.expunge(signal)
-            return signal
+        signal = ReplenishmentSignal(
+            item_id=row[2],
+            current_qty=row[3],
+            reorder_point=row[4],
+            reorder_qty=row[5],
+            status=row[6],
+        )
+        signal.signal_id = row[0]
+        signal.created_ts = row[1]
+        return signal
 
     def has_open_signal(self, item_id: str) -> bool:
         """Check if an OPEN signal exists for the item."""
-        with self.session() as session:
-            stmt = select(ReplenishmentSignal).where(
-                ReplenishmentSignal.item_id == item_id,
-                ReplenishmentSignal.status == "OPEN",
-            )
-            return session.scalar(stmt) is not None
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT 1 FROM replenishment_signals
+                    WHERE item_id = %s AND status = 'OPEN'
+                    LIMIT 1
+                    """,
+                    (item_id,),
+                )
+                return cur.fetchone() is not None
 
 
 # Global database instance
