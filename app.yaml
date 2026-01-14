@@ -1,0 +1,27 @@
+# Databricks Apps configuration for Inventory Demo
+# https://docs.databricks.com/dev-tools/databricks-apps/app-runtime
+
+command:
+  - uvicorn
+  - inventory_demo.api.main:app
+  - --host
+  - "0.0.0.0"
+  - --port
+  - "8000"
+
+env:
+  # Reference the Lakebase database resource defined in bundle
+  - name: LAKEBASE_HOST
+    valueFrom: lakebase.host
+  - name: LAKEBASE_INSTANCE_NAME
+    valueFrom: lakebase.instance_name
+  - name: LAKEBASE_DATABASE
+    valueFrom: lakebase.database_name
+  - name: LAKEBASE_USE_OAUTH
+    value: "true"
+  - name: LAKEBASE_USER
+    value: "lakebase"
+  - name: DATABRICKS_HOST
+    value: "https://adb-984752964297111.11.azuredatabricks.net"
+  - name: LOG_LEVEL
+    value: "INFO"

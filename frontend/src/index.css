@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+/* html5-qrcode scanner styles */
+.scanner-container {
+  min-height: 350px;
+  overflow: hidden;
+}
+
+.scanner-container video {
+  border-radius: 0.5rem;
+}
+
+/* Remove the powered by text and make scan region more visible */
+.scanner-container #html5-qrcode-anchor-scan-type-change,
+.scanner-container [style*="powered by"] {
+  display: none !important;
+}

@@ -1,0 +1,48 @@
+# Databricks Asset Bundle configuration for Inventory Demo
+#
+# Deploy with: databricks bundle deploy -t <target>
+#
+# Targets:
+#   - dev: Development environment
+#   - prod: Production environment
+
+bundle:
+  name: inventory-demo
+
+# Include resource definitions from the resources directory
+include:
+  - resources/*.yml
+
+# Workspace sync configuration
+sync:
+  include:
+    - src/**
+    - frontend/dist/**
+    - sql/**
+    - app.yaml
+    - pyproject.toml
+    - requirements.txt
+
+# Variables with defaults (can be overridden per target)
+variables:
+  lakebase_instance:
+    description: Lakebase instance name for OAuth
+    default: mfg-intralogistics-optimization
+  lakebase_database:
+    description: Lakebase database name
+    default: databricks_postgres
+
+# Target environments
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/dev
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/prod
+    run_as:
+      user_name: ${workspace.current_user.userName}
