@@ -3,7 +3,7 @@
 
 command:
   - uvicorn
-  - inventory_demo.api.main:app
+  - app:app
   - --host
   - "0.0.0.0"
   - --port

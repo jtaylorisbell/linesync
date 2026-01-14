@@ -19,6 +19,7 @@ sync:
     - src/**
     - frontend/dist/**
     - sql/**
+    - app.py
     - app.yaml
     - pyproject.toml
     - requirements.txt
