@@ -63,6 +63,34 @@ async def health() -> HealthResponse:
     )
 
 
+@app.get("/api/debug-paths")
+async def debug_paths():
+    """Debug endpoint to check path resolution."""
+    from_main = Path(__file__).parent.parent.parent.parent
+    from_cwd = Path.cwd()
+
+    # Determine project root (same logic as below)
+    if (from_main / "marketing").exists():
+        project_root = from_main
+    elif (from_cwd / "marketing").exists():
+        project_root = from_cwd
+    else:
+        project_root = from_main
+
+    return {
+        "cwd": str(from_cwd),
+        "from_main": str(from_main),
+        "project_root": str(project_root),
+        "marketing_dir": str(project_root / "marketing"),
+        "marketing_exists": (project_root / "marketing").exists(),
+        "marketing_index_exists": (project_root / "marketing" / "index.html").exists(),
+        "frontend_dist": str(project_root / "frontend" / "dist"),
+        "frontend_exists": (project_root / "frontend" / "dist").exists(),
+        "cwd_contents": [str(p.name) for p in from_cwd.iterdir()] if from_cwd.exists() else [],
+        "from_main_contents": [str(p.name) for p in from_main.iterdir()] if from_main.exists() else [],
+    }
+
+
 @app.get("/api/me", response_model=CurrentUserResponse)
 async def get_me(request: Request) -> CurrentUserResponse:
     """Get current user information.
