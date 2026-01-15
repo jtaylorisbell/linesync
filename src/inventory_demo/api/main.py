@@ -139,7 +139,7 @@ async def create_consume_event(
         triggered_signal = TriggeredSignalResponse(
             signal_id=signal.signal_id,
             item_id=signal.item_id,
-            current_qty=signal.current_qty,
+            current_qty=signal.triggered_at_qty,  # Use triggered_at_qty (historical snapshot)
             reorder_qty=signal.reorder_qty,
         )
 
@@ -202,19 +202,22 @@ async def get_inventory_item(item_id: str) -> InventoryItemResponse:
 
 @app.get("/api/signals", response_model=SignalListResponse)
 async def list_signals(status: str | None = None, limit: int = 50) -> SignalListResponse:
-    """List replenishment signals, optionally filtered by status."""
+    """List replenishment signals, optionally filtered by status.
+
+    Returns signals with LIVE current_qty (actual inventory, not stale snapshot).
+    """
     db = get_db()
     signals = db.get_signals(status=status, limit=limit)
 
     signal_responses = [
         ReplenishmentSignalResponse(
-            signal_id=s.signal_id,
-            created_ts=s.created_ts,
-            item_id=s.item_id,
-            current_qty=s.current_qty,
-            reorder_point=s.reorder_point,
-            reorder_qty=s.reorder_qty,
-            status=SignalStatus(s.status),
+            signal_id=s["signal_id"],
+            created_ts=s["created_ts"],
+            item_id=s["item_id"],
+            current_qty=s["current_qty"],  # LIVE inventory value
+            reorder_point=s["reorder_point"],
+            reorder_qty=s["reorder_qty"],
+            status=SignalStatus(s["status"]),
         )
         for s in signals
     ]
@@ -230,7 +233,10 @@ async def list_signals(status: str | None = None, limit: int = 50) -> SignalList
 
 @app.post("/api/signals/{signal_id}/acknowledge", response_model=ReplenishmentSignalResponse)
 async def acknowledge_signal(signal_id: UUID) -> ReplenishmentSignalResponse:
-    """Acknowledge a replenishment signal."""
+    """Acknowledge a replenishment signal.
+
+    This inserts a new row with ACKNOWLEDGED status (append-only pattern).
+    """
     db = get_db()
     signal = db.update_signal_status(signal_id, SignalStatus.ACKNOWLEDGED.value)
 
@@ -238,13 +244,13 @@ async def acknowledge_signal(signal_id: UUID) -> ReplenishmentSignalResponse:
         raise HTTPException(status_code=404, detail=f"Signal not found: {signal_id}")
 
     return ReplenishmentSignalResponse(
-        signal_id=signal.signal_id,
-        created_ts=signal.created_ts,
-        item_id=signal.item_id,
-        current_qty=signal.current_qty,
-        reorder_point=signal.reorder_point,
-        reorder_qty=signal.reorder_qty,
-        status=SignalStatus(signal.status),
+        signal_id=signal["signal_id"],
+        created_ts=signal["created_ts"],
+        item_id=signal["item_id"],
+        current_qty=signal["current_qty"],  # LIVE inventory value
+        reorder_point=signal["reorder_point"],
+        reorder_qty=signal["reorder_qty"],
+        status=SignalStatus(signal["status"]),
     )
 
 

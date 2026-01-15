@@ -16,8 +16,54 @@ import {
   FileText,
   Upload,
 } from 'lucide-react';
+import * as pdfjsLib from 'pdfjs-dist';
 import { api, ApiError } from '../api/client';
 import type { ParsedLineItem, BulkIntakeItem } from '../types/api';
+
+// Set up PDF.js worker - use unpkg which has latest versions
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+
+/**
+ * Convert a PDF file to a JPEG image by rendering the first page.
+ * Returns a File object that can be sent to the API.
+ */
+async function convertPdfToImage(pdfFile: File): Promise<File> {
+  const arrayBuffer = await pdfFile.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const page = await pdf.getPage(1);
+
+  // Render at 2x scale for better quality
+  const scale = 2;
+  const viewport = page.getViewport({ scale });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Failed to get canvas context');
+  }
+
+  await page.render({
+    canvasContext: context,
+    viewport,
+    canvas,
+  }).promise;
+
+  // Convert canvas to blob
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error('Failed to convert canvas to blob'))),
+      'image/jpeg',
+      0.92
+    );
+  });
+
+  // Create a new File from the blob
+  const fileName = pdfFile.name.replace(/\.pdf$/i, '.jpg');
+  return new File([blob], fileName, { type: 'image/jpeg' });
+}
 
 interface EditableItem extends ParsedLineItem {
   id: string;
@@ -130,6 +176,12 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
       } else {
         file = input;
       }
+
+      // Convert PDF to image since vision models only accept images
+      if (file.type === 'application/pdf') {
+        file = await convertPdfToImage(file);
+      }
+
       return api.parsePackingSlip(file);
     },
     onSuccess: (data) => {

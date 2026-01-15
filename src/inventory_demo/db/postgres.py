@@ -314,131 +314,203 @@ class PostgresDB:
         reorder_point: int = 10,
         reorder_qty: int = 24,
     ) -> ReplenishmentSignal | None:
-        """Create a replenishment signal if one doesn't exist for this item."""
-        try:
-            with self.session() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO replenishment_signals
-                            (item_id, current_qty, trigger_event_id,
-                             reorder_point, reorder_qty, status)
-                        VALUES (%s, %s, %s, %s, %s, 'OPEN')
-                        RETURNING signal_id, created_ts, item_id, current_qty,
-                                  reorder_point, reorder_qty, status
-                        """,
-                        (item_id, current_qty, str(trigger_event_id),
-                         reorder_point, reorder_qty),
-                    )
-                    row = cur.fetchone()
+        """Create a replenishment signal if one doesn't already exist (OPEN) for this item.
 
-            signal = ReplenishmentSignal(
-                item_id=row[2],
-                current_qty=row[3],
-                reorder_point=row[4],
-                reorder_qty=row[5],
-                status=row[6],
-            )
-            signal.signal_id = row[0]
-            signal.created_ts = row[1]
-            logger.info(
-                "replenishment_signal_created",
-                item_id=item_id,
-                current_qty=current_qty
-            )
-            return signal
-        except Exception as e:
-            # Unique constraint violation - OPEN signal already exists
-            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
-                logger.debug("replenishment_signal_exists", item_id=item_id)
-                return None
-            raise
+        This is an append-only table. Each signal creation inserts a new row.
+        """
+        # First check if there's already an OPEN signal for this item
+        if self.has_open_signal(item_id):
+            logger.debug("replenishment_signal_exists", item_id=item_id)
+            return None
+
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO replenishment_signals
+                        (item_id, triggered_at_qty, trigger_event_id,
+                         reorder_point, reorder_qty, status)
+                    VALUES (%s, %s, %s, %s, %s, 'OPEN')
+                    RETURNING id, signal_id, created_ts, item_id, triggered_at_qty,
+                              reorder_point, reorder_qty, status
+                    """,
+                    (item_id, current_qty, str(trigger_event_id),
+                     reorder_point, reorder_qty),
+                )
+                row = cur.fetchone()
+
+        signal = ReplenishmentSignal(
+            item_id=row[3],
+            triggered_at_qty=row[4],
+            reorder_point=row[5],
+            reorder_qty=row[6],
+            status=row[7],
+            trigger_event_id=trigger_event_id,
+        )
+        signal.id = row[0]
+        signal.signal_id = row[1]
+        signal.created_ts = row[2]
+        logger.info(
+            "replenishment_signal_created",
+            item_id=item_id,
+            triggered_at_qty=current_qty
+        )
+        return signal
 
     def get_signals(
         self, status: str | None = None, limit: int = 50
-    ) -> list[ReplenishmentSignal]:
-        """Get replenishment signals, optionally filtered by status."""
+    ) -> list[dict]:
+        """Get replenishment signals with LIVE inventory, optionally filtered by status.
+
+        This uses window functions to get the latest state of each signal (append-only pattern)
+        and joins with live inventory calculations for accurate current_qty.
+
+        Returns list of dicts with signal data + live current_qty.
+        """
         with self.session() as conn:
             with conn.cursor() as cur:
+                # Query uses:
+                # 1. Window function to get latest row per signal_id
+                # 2. Join with live inventory calculation for accurate current_qty
+                query = """
+                    WITH latest_signals AS (
+                        SELECT *,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY signal_id
+                                   ORDER BY created_ts DESC
+                               ) as rn
+                        FROM replenishment_signals
+                    ),
+                    live_inventory AS (
+                        SELECT
+                            item_id,
+                            COALESCE(SUM(CASE WHEN event_type = 'INTAKE'
+                                         THEN qty ELSE 0 END), 0) -
+                            COALESCE(SUM(CASE WHEN event_type = 'CONSUME'
+                                         THEN qty ELSE 0 END), 0) AS on_hand_qty
+                        FROM scan_events
+                        GROUP BY item_id
+                    )
+                    SELECT
+                        s.signal_id, s.created_ts, s.item_id,
+                        COALESCE(i.on_hand_qty, 0) AS current_qty,
+                        s.triggered_at_qty,
+                        s.reorder_point, s.reorder_qty, s.status
+                    FROM latest_signals s
+                    LEFT JOIN live_inventory i ON s.item_id = i.item_id
+                    WHERE s.rn = 1
+                """
                 if status:
-                    cur.execute(
-                        """
-                        SELECT signal_id, created_ts, item_id, current_qty,
-                               reorder_point, reorder_qty, status
-                        FROM replenishment_signals
-                        WHERE status = %s
-                        ORDER BY created_ts DESC
-                        LIMIT %s
-                        """,
-                        (status, limit),
-                    )
+                    query += " AND s.status = %s ORDER BY s.created_ts DESC LIMIT %s"
+                    cur.execute(query, (status, limit))
                 else:
-                    cur.execute(
-                        """
-                        SELECT signal_id, created_ts, item_id, current_qty,
-                               reorder_point, reorder_qty, status
-                        FROM replenishment_signals
-                        ORDER BY created_ts DESC
-                        LIMIT %s
-                        """,
-                        (limit,),
-                    )
+                    query += " ORDER BY s.created_ts DESC LIMIT %s"
+                    cur.execute(query, (limit,))
                 rows = cur.fetchall()
 
         signals = []
         for row in rows:
-            signal = ReplenishmentSignal(
-                item_id=row[2],
-                current_qty=row[3],
-                reorder_point=row[4],
-                reorder_qty=row[5],
-                status=row[6],
-            )
-            signal.signal_id = row[0]
-            signal.created_ts = row[1]
-            signals.append(signal)
+            signals.append({
+                "signal_id": row[0],
+                "created_ts": row[1],
+                "item_id": row[2],
+                "current_qty": row[3],  # LIVE inventory value
+                "triggered_at_qty": row[4],  # Historical snapshot
+                "reorder_point": row[5],
+                "reorder_qty": row[6],
+                "status": row[7],
+            })
         return signals
 
     def update_signal_status(
-        self, signal_id: UUID, status: str
-    ) -> ReplenishmentSignal | None:
-        """Update a signal's status."""
+        self, signal_id: UUID, new_status: str
+    ) -> dict | None:
+        """Update a signal's status by inserting a new row (append-only pattern).
+
+        Returns dict with signal data including live current_qty.
+        """
         with self.session() as conn:
             with conn.cursor() as cur:
+                # First get the current signal data
                 cur.execute(
                     """
-                    UPDATE replenishment_signals
-                    SET status = %s
-                    WHERE signal_id = %s
-                    RETURNING signal_id, created_ts, item_id, current_qty,
+                    WITH latest AS (
+                        SELECT *,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY signal_id ORDER BY created_ts DESC
+                               ) as rn
+                        FROM replenishment_signals
+                        WHERE signal_id = %s
+                    )
+                    SELECT signal_id, item_id, triggered_at_qty, reorder_point,
+                           reorder_qty, trigger_event_id
+                    FROM latest WHERE rn = 1
+                    """,
+                    (str(signal_id),),
+                )
+                existing = cur.fetchone()
+
+                if existing is None:
+                    return None
+
+                # Insert new row with updated status
+                cur.execute(
+                    """
+                    INSERT INTO replenishment_signals
+                        (signal_id, item_id, triggered_at_qty, reorder_point,
+                         reorder_qty, trigger_event_id, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, signal_id, created_ts, item_id, triggered_at_qty,
                               reorder_point, reorder_qty, status
                     """,
-                    (status, str(signal_id)),
+                    (str(existing[0]), existing[1], existing[2], existing[3],
+                     existing[4], str(existing[5]), new_status),
                 )
                 row = cur.fetchone()
 
-        if row is None:
-            return None
+                # Get live inventory for this item
+                cur.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(CASE WHEN event_type = 'INTAKE' THEN qty ELSE 0 END), 0) -
+                        COALESCE(SUM(CASE WHEN event_type = 'CONSUME' THEN qty ELSE 0 END), 0)
+                    FROM scan_events WHERE item_id = %s
+                    """,
+                    (existing[1],),
+                )
+                inv_row = cur.fetchone()
+                live_qty = inv_row[0] if inv_row else 0
 
-        signal = ReplenishmentSignal(
-            item_id=row[2],
-            current_qty=row[3],
-            reorder_point=row[4],
-            reorder_qty=row[5],
-            status=row[6],
-        )
-        signal.signal_id = row[0]
-        signal.created_ts = row[1]
-        return signal
+        return {
+            "signal_id": row[1],
+            "created_ts": row[2],
+            "item_id": row[3],
+            "current_qty": live_qty,
+            "triggered_at_qty": row[4],
+            "reorder_point": row[5],
+            "reorder_qty": row[6],
+            "status": row[7],
+        }
 
     def has_open_signal(self, item_id: str) -> bool:
-        """Check if an OPEN signal exists for the item."""
+        """Check if an OPEN signal currently exists for the item.
+
+        Uses window function to check the latest state of each signal.
+        """
         with self.session() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT 1 FROM replenishment_signals
-                    WHERE item_id = %s AND status = 'OPEN'
+                    WITH latest AS (
+                        SELECT signal_id, status,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY signal_id ORDER BY created_ts DESC
+                               ) as rn
+                        FROM replenishment_signals
+                        WHERE item_id = %s
+                    )
+                    SELECT 1 FROM latest
+                    WHERE rn = 1 AND status = 'OPEN'
                     LIMIT 1
                     """,
                     (item_id,),
@@ -447,52 +519,78 @@ class PostgresDB:
 
     def fulfill_open_signals(
         self, item_id: str, fulfill_event_id: UUID
-    ) -> list[ReplenishmentSignal]:
-        """Fulfill all OPEN signals for an item.
+    ) -> list[dict]:
+        """Fulfill all OPEN signals for an item by inserting FULFILLED rows.
+
+        This is append-only: instead of UPDATE, we INSERT new rows with status='FULFILLED'.
 
         Args:
             item_id: The item whose signals to fulfill
             fulfill_event_id: The intake event that fulfilled the signals
 
         Returns:
-            List of fulfilled signals
+            List of fulfilled signal dicts
         """
         with self.session() as conn:
             with conn.cursor() as cur:
+                # Find all currently OPEN signals for this item
                 cur.execute(
                     """
-                    UPDATE replenishment_signals
-                    SET status = 'FULFILLED'
-                    WHERE item_id = %s AND status = 'OPEN'
-                    RETURNING signal_id, created_ts, item_id, current_qty,
-                              reorder_point, reorder_qty, status
+                    WITH latest AS (
+                        SELECT *,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY signal_id ORDER BY created_ts DESC
+                               ) as rn
+                        FROM replenishment_signals
+                        WHERE item_id = %s
+                    )
+                    SELECT signal_id, item_id, triggered_at_qty, reorder_point,
+                           reorder_qty
+                    FROM latest
+                    WHERE rn = 1 AND status = 'OPEN'
                     """,
                     (item_id,),
                 )
-                rows = cur.fetchall()
+                open_signals = cur.fetchall()
 
-        signals = []
-        for row in rows:
-            signal = ReplenishmentSignal(
-                item_id=row[2],
-                current_qty=row[3],
-                reorder_point=row[4],
-                reorder_qty=row[5],
-                status=row[6],
-            )
-            signal.signal_id = row[0]
-            signal.created_ts = row[1]
-            signals.append(signal)
+                if not open_signals:
+                    return []
 
-        if signals:
+                # Insert FULFILLED rows for each open signal
+                fulfilled = []
+                for sig in open_signals:
+                    cur.execute(
+                        """
+                        INSERT INTO replenishment_signals
+                            (signal_id, item_id, triggered_at_qty, reorder_point,
+                             reorder_qty, trigger_event_id, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, 'FULFILLED')
+                        RETURNING id, signal_id, created_ts, item_id, triggered_at_qty,
+                                  reorder_point, reorder_qty, status
+                        """,
+                        (str(sig[0]), sig[1], sig[2], sig[3], sig[4],
+                         str(fulfill_event_id)),
+                    )
+                    row = cur.fetchone()
+                    fulfilled.append({
+                        "signal_id": row[1],
+                        "created_ts": row[2],
+                        "item_id": row[3],
+                        "triggered_at_qty": row[4],
+                        "reorder_point": row[5],
+                        "reorder_qty": row[6],
+                        "status": row[7],
+                    })
+
+        if fulfilled:
             logger.info(
                 "replenishment_signals_fulfilled",
                 item_id=item_id,
-                count=len(signals),
+                count=len(fulfilled),
                 fulfill_event_id=str(fulfill_event_id),
             )
 
-        return signals
+        return fulfilled
 
 
 # Global database instance

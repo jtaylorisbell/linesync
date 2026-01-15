@@ -44,18 +44,25 @@ class ScanEvent(Base):
 
 
 class ReplenishmentSignal(Base):
-    """Replenishment signal triggered when inventory is low."""
+    """Replenishment signal triggered when inventory is low.
+
+    This table is append-only for analytics. Each status change creates a new row.
+    Use the signal_id to group related rows and created_ts to find the latest state.
+    """
 
     __tablename__ = "replenishment_signals"
 
-    signal_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
+    # Surrogate primary key for each row (append-only pattern)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # Logical signal identifier - groups related status transitions
+    signal_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), default=uuid4)
     created_ts: Mapped[datetime] = mapped_column(default=_utc_now)
     item_id: Mapped[str] = mapped_column(Text, nullable=False)
-    current_qty: Mapped[int] = mapped_column(nullable=False)
+    # Qty at the time this row was created (historical snapshot for analytics)
+    triggered_at_qty: Mapped[int] = mapped_column(nullable=False)
     reorder_point: Mapped[int] = mapped_column(default=10)
     reorder_qty: Mapped[int] = mapped_column(default=24)
+    # Event that triggered this status (OPEN: consume event, FULFILLED: intake event)
     trigger_event_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("scan_events.event_id"), nullable=False
     )
@@ -66,4 +73,5 @@ class ReplenishmentSignal(Base):
             "status IN ('OPEN', 'ACKNOWLEDGED', 'FULFILLED')", name="ck_signal_status"
         ),
         Index("idx_replenishment_signals_item_status", "item_id", "status"),
+        Index("idx_replenishment_signals_signal_id_ts", "signal_id", "created_ts"),
     )

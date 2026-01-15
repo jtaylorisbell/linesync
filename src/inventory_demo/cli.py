@@ -41,6 +41,7 @@ def init_db(
     init_sql = """
 -- Drop existing objects if they exist (for clean re-deployment)
 DROP VIEW IF EXISTS inventory_current;
+DROP VIEW IF EXISTS replenishment_signals_current;
 DROP TABLE IF EXISTS replenishment_signals;
 DROP TABLE IF EXISTS scan_events;
 
@@ -63,11 +64,14 @@ CREATE INDEX idx_scan_events_item_id ON scan_events (item_id, event_ts DESC);
 CREATE INDEX idx_scan_events_ts ON scan_events (event_ts DESC);
 
 -- Replenishment signals table: tracks when items need restocking
+-- This is an APPEND-ONLY table for analytics. Each status change creates a new row.
+-- Use signal_id to group related rows, created_ts to find the latest state.
 CREATE TABLE replenishment_signals (
-    signal_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id SERIAL PRIMARY KEY,                    -- Surrogate key for each row
+    signal_id UUID NOT NULL DEFAULT gen_random_uuid(),  -- Logical signal identifier
     created_ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     item_id TEXT NOT NULL,
-    current_qty INT NOT NULL,
+    triggered_at_qty INT NOT NULL,            -- Qty when this status was recorded (historical)
     reorder_point INT NOT NULL DEFAULT 10,
     reorder_qty INT NOT NULL DEFAULT 24,
     trigger_event_id UUID REFERENCES scan_events(event_id),
@@ -77,10 +81,8 @@ CREATE TABLE replenishment_signals (
 -- Index for querying signals by item and status
 CREATE INDEX idx_replenishment_signals_item_status ON replenishment_signals (item_id, status);
 
--- Ensure only one OPEN signal per item at a time
-CREATE UNIQUE INDEX idx_replenishment_signals_item_open
-ON replenishment_signals (item_id)
-WHERE status = 'OPEN';
+-- Index for efficient latest-state queries (window function optimization)
+CREATE INDEX idx_replenishment_signals_signal_id_ts ON replenishment_signals (signal_id, created_ts DESC);
 
 -- Computed view for current inventory levels
 CREATE VIEW inventory_current AS
@@ -93,6 +95,17 @@ SELECT
     MAX(event_ts) AS last_activity_ts
 FROM scan_events
 GROUP BY item_id;
+
+-- View for current state of each replenishment signal (for convenience)
+CREATE VIEW replenishment_signals_current AS
+WITH latest AS (
+    SELECT *,
+           ROW_NUMBER() OVER (PARTITION BY signal_id ORDER BY created_ts DESC) as rn
+    FROM replenishment_signals
+)
+SELECT signal_id, created_ts, item_id, triggered_at_qty, reorder_point,
+       reorder_qty, trigger_event_id, status
+FROM latest WHERE rn = 1;
 """
 
     settings = get_settings()
@@ -169,7 +182,7 @@ def clear_db(
 
 @app.command()
 def migrate():
-    """Apply database migrations (add missing columns)."""
+    """Apply database migrations (add missing columns, convert to append-only)."""
 
     settings = get_settings()
     console.print(Panel.fit(
@@ -184,29 +197,89 @@ def migrate():
         conn = get_local_connection()
         cur = conn.cursor()
 
-        # Check if user_email column exists
+        migrations_applied = []
+
+        # Migration 1: Add user_email column to scan_events
         cur.execute("""
             SELECT column_name
             FROM information_schema.columns
             WHERE table_name = 'scan_events' AND column_name = 'user_email'
         """)
-        has_user_email = cur.fetchone() is not None
+        if cur.fetchone() is None:
+            console.print("[yellow]  Adding user_email column to scan_events...[/yellow]")
+            cur.execute("ALTER TABLE scan_events ADD COLUMN user_email TEXT")
+            migrations_applied.append("user_email column")
 
-        if has_user_email:
-            console.print(
-                "[green]✓ No migrations needed - database is up to date[/green]"
-            )
-            cur.close()
-            conn.close()
-            return
+        # Migration 2: Convert replenishment_signals to append-only schema
+        cur.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'replenishment_signals' AND column_name = 'triggered_at_qty'
+        """)
+        if cur.fetchone() is None:
+            console.print("[yellow]  Converting replenishment_signals to append-only schema...[/yellow]")
 
-        console.print("[yellow]  Adding user_email column to scan_events...[/yellow]")
-        cur.execute("ALTER TABLE scan_events ADD COLUMN user_email TEXT")
+            # Step 1: Add new columns
+            console.print("    - Adding id column...")
+            cur.execute("""
+                ALTER TABLE replenishment_signals
+                ADD COLUMN id SERIAL
+            """)
+
+            console.print("    - Renaming current_qty to triggered_at_qty...")
+            cur.execute("""
+                ALTER TABLE replenishment_signals
+                RENAME COLUMN current_qty TO triggered_at_qty
+            """)
+
+            # Step 2: Drop old unique constraint and primary key
+            console.print("    - Dropping old constraints...")
+            cur.execute("""
+                DROP INDEX IF EXISTS idx_replenishment_signals_item_open
+            """)
+            cur.execute("""
+                ALTER TABLE replenishment_signals
+                DROP CONSTRAINT IF EXISTS replenishment_signals_pkey
+            """)
+
+            # Step 3: Set id as new primary key
+            console.print("    - Setting id as primary key...")
+            cur.execute("""
+                ALTER TABLE replenishment_signals
+                ADD PRIMARY KEY (id)
+            """)
+
+            # Step 4: Add new index for window function optimization
+            console.print("    - Adding signal_id timestamp index...")
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_replenishment_signals_signal_id_ts
+                ON replenishment_signals (signal_id, created_ts DESC)
+            """)
+
+            # Step 5: Create current state view
+            console.print("    - Creating replenishment_signals_current view...")
+            cur.execute("""
+                CREATE OR REPLACE VIEW replenishment_signals_current AS
+                WITH latest AS (
+                    SELECT *,
+                           ROW_NUMBER() OVER (PARTITION BY signal_id ORDER BY created_ts DESC) as rn
+                    FROM replenishment_signals
+                )
+                SELECT signal_id, created_ts, item_id, triggered_at_qty, reorder_point,
+                       reorder_qty, trigger_event_id, status
+                FROM latest WHERE rn = 1
+            """)
+
+            migrations_applied.append("append-only schema")
+
         conn.commit()
         cur.close()
         conn.close()
 
-        console.print("[green]✓ Migration completed successfully![/green]")
+        if migrations_applied:
+            console.print(f"[green]✓ Migrations applied: {', '.join(migrations_applied)}[/green]")
+        else:
+            console.print("[green]✓ No migrations needed - database is up to date[/green]")
 
     except Exception as e:
         console.print(f"[red]✗ Error running migration: {e}[/red]")
@@ -311,10 +384,20 @@ def status():
         cur.execute("SELECT COUNT(*) FROM replenishment_signals")
         signals_count = cur.fetchone()[0]
 
-        cur.execute(
-            "SELECT COUNT(*) FROM replenishment_signals WHERE status = 'OPEN'"
-        )
+        # Count open signals using window function (latest state per signal_id)
+        cur.execute("""
+            WITH latest AS (
+                SELECT signal_id, status,
+                       ROW_NUMBER() OVER (PARTITION BY signal_id ORDER BY created_ts DESC) as rn
+                FROM replenishment_signals
+            )
+            SELECT COUNT(*) FROM latest WHERE rn = 1 AND status = 'OPEN'
+        """)
         open_signals = cur.fetchone()[0]
+
+        # Count unique signals
+        cur.execute("SELECT COUNT(DISTINCT signal_id) FROM replenishment_signals")
+        unique_signals = cur.fetchone()[0]
 
         cur.close()
         conn.close()
@@ -322,7 +405,8 @@ def status():
         console.print("[bold]Table Statistics:[/bold]")
         console.print(f"  scan_events: {events_count} rows")
         console.print(
-            f"  replenishment_signals: {signals_count} rows ({open_signals} open)"
+            f"  replenishment_signals: {signals_count} rows "
+            f"({unique_signals} unique signals, {open_signals} currently open)"
         )
 
     except Exception as e:
