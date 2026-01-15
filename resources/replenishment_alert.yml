@@ -1,0 +1,33 @@
+# resources:
+#   alerts:
+#     open_replenishment_signals:
+#       display_name: "Open Replenishment Signals
+
+#       # Query to count open replenishment signals
+#       query_text: |
+#         SELECT COUNT(*) as open_count
+#         FROM ${var.lakebase_catalog}.${var.lakebase_schema}.replenishment_signals
+#         WHERE status = 'OPEN'
+
+#       warehouse_id: ${var.sql_warehouse_id}
+
+#       # Run every 5 minutes
+#       schedule:
+#         quartz_cron_expression: "0 */5 * * * ?"
+#         timezone_id: "America/Los_Angeles"
+
+#       # Alert when count > 0
+#       condition:
+#         op: GREATER_THAN
+#         operand:
+#           column:
+#             name: open_count
+#         threshold:
+#           value:
+#             double_value: 0
+
+#       custom_subject: "Replenishment Alert: Open signals detected"
+#       custom_body: |
+#         There are {{ query_result.open_count }} open replenishment signals that need attention.
+
+#         Please review and fulfill these signals to maintain inventory levels.

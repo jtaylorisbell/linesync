@@ -19,6 +19,7 @@ sync:
     - src/**
     - frontend/dist/**
     - sql/**
+    - pipelines/**
     - app.py
     - app.yaml
     - pyproject.toml
@@ -28,10 +29,22 @@ sync:
 variables:
   lakebase_instance:
     description: Lakebase instance name for OAuth
-    default: mfg-intralogistics-optimization
+    default: buildathon-isbell
   lakebase_database:
     description: Lakebase database name
     default: databricks_postgres
+  lakebase_catalog:
+    description: Unity Catalog name for Lakebase instance
+    default: buildathon_isbell_pg_catalog
+  lakebase_schema:
+    description: Schema in Lakebase catalog containing source tables
+    default: public
+  target_catalog:
+    description: Unity Catalog for output Delta tables
+    default: serverless_edn2pd_catalog
+  sql_warehouse_id:
+    description: SQL Warehouse ID for alerts and queries
+    default: starter
 
 # Target environments
 targets:
@@ -39,6 +52,7 @@ targets:
     mode: development
     default: true
     workspace:
+      profile: fe-sandbox
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/dev
 
   prod:

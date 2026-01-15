@@ -1,0 +1,35 @@
+resources:
+  schemas:
+    inventory_schema:
+      name: inventory
+      catalog_name: ${var.target_catalog}
+      comment: Inventory demo Delta tables (bronze/silver/gold)
+
+  pipelines:
+    lakebase_to_delta:
+      name: inventory-lakebase-to-delta-${bundle.target}
+
+      # Target catalog and schema for output Delta tables
+      catalog: ${resources.schemas.inventory_schema.catalog_name}
+      target: ${resources.schemas.inventory_schema.name}
+
+      # Source Lakebase catalog (registered in Unity Catalog)
+      configuration:
+        pipeline.source_catalog: ${var.lakebase_catalog}
+        pipeline.source_schema: ${var.lakebase_schema}
+
+      continuous: false
+
+      serverless: true
+
+      libraries:
+        - file:
+            path: ../pipelines/lakebase_to_delta.py
+
+      permissions:
+        - level: CAN_VIEW
+          group_name: users
+        - level: CAN_RUN
+          user_name: ${workspace.current_user.userName}
+        - level: CAN_MANAGE
+          user_name: ${workspace.current_user.userName}

@@ -21,6 +21,15 @@ class ScanRequest(BaseModel):
 # Response models
 
 
+class TriggeredSignalResponse(BaseModel):
+    """Minimal signal info when a replenishment is triggered."""
+
+    signal_id: UUID
+    item_id: str
+    current_qty: int
+    reorder_qty: int
+
+
 class ScanEventResponse(BaseModel):
     """Response for a scan event."""
 
@@ -31,6 +40,9 @@ class ScanEventResponse(BaseModel):
     item_id: str
     qty: int
     on_hand_qty: int = Field(description="Current inventory after this event")
+    triggered_signal: TriggeredSignalResponse | None = Field(
+        default=None, description="Replenishment signal if one was triggered"
+    )
 
     model_config = {"from_attributes": True}
 

@@ -6,6 +6,13 @@ export interface ScanRequest {
   barcode_raw: string;
 }
 
+export interface TriggeredSignal {
+  signal_id: string;
+  item_id: string;
+  current_qty: number;
+  reorder_qty: number;
+}
+
 export interface ScanEventResponse {
   event_id: string;
   event_ts: string;
@@ -14,6 +21,7 @@ export interface ScanEventResponse {
   item_id: string;
   qty: number;
   on_hand_qty: number;
+  triggered_signal: TriggeredSignal | null;
 }
 
 export interface InventoryItem {

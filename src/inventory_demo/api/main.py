@@ -24,6 +24,7 @@ from inventory_demo.api.schemas import (
     ScanEventResponse,
     ScanRequest,
     SignalListResponse,
+    TriggeredSignalResponse,
 )
 from inventory_demo.api.user import CurrentUser, get_current_user
 from inventory_demo.config import get_settings
@@ -133,6 +134,15 @@ async def create_consume_event(
     except DuplicateScanError as e:
         raise HTTPException(status_code=429, detail=str(e))
 
+    triggered_signal = None
+    if signal is not None:
+        triggered_signal = TriggeredSignalResponse(
+            signal_id=signal.signal_id,
+            item_id=signal.item_id,
+            current_qty=signal.current_qty,
+            reorder_qty=signal.reorder_qty,
+        )
+
     return ScanEventResponse(
         event_id=event.event_id,
         event_ts=event.event_ts,
@@ -141,6 +151,7 @@ async def create_consume_event(
         item_id=event.item_id,
         qty=event.qty,
         on_hand_qty=on_hand_qty,
+        triggered_signal=triggered_signal,
     )
 
 

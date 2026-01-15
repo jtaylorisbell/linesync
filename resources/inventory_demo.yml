@@ -3,7 +3,7 @@ resources:
     inventory_demo:
       name: inventory-demo-${bundle.target}
       description: Barcode-based inventory intake & consumption demo
-      source_code_path: ../
+      source_code_path: .
 
       # API scopes for database credential generation
       user_api_scopes:

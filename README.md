@@ -44,14 +44,9 @@ cd frontend && npm run build
 databricks bundle deploy -t dev
 ```
 
-### 3. Deploy the app source code
+This automatically uploads source code and deploys the app. The bundle configuration sets `source_code_path: .` which maps to `{root_path}/files` in the workspace.
 
-```bash
-databricks apps deploy inventory-demo-dev \
-  --source-code-path /Workspace/Users/<your-email>/.bundle/inventory-demo/dev/files
-```
-
-### 4. Grant table permissions to the app service principal
+### 3. Grant table permissions to the app service principal
 
 **IMPORTANT**: The app runs as its own service principal, which won't have access to tables created by you. After the first deployment, you must grant permissions.
 
@@ -97,7 +92,7 @@ conn.close()
 "
 ```
 
-### 5. Access the app
+### 4. Access the app
 
 The app URL will be shown in the deployment output, or get it with:
 ```bash
