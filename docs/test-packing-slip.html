@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Packing Slip - PO#2024-78432</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      padding: 40px;
+      max-width: 8.5in;
+      margin: 0 auto;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #333;
+    }
+    .company-info h1 {
+      font-size: 24px;
+      color: #1a4d8f;
+      margin-bottom: 5px;
+    }
+    .company-info p {
+      color: #666;
+      line-height: 1.4;
+    }
+    .document-info {
+      text-align: right;
+    }
+    .document-info h2 {
+      font-size: 28px;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    .document-info p {
+      line-height: 1.6;
+    }
+    .document-info strong {
+      color: #1a4d8f;
+    }
+    .addresses {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 30px;
+    }
+    .address-box {
+      width: 45%;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 4px;
+    }
+    .address-box h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: #666;
+      margin-bottom: 8px;
+      letter-spacing: 1px;
+    }
+    .address-box p {
+      line-height: 1.5;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 30px;
+    }
+    th {
+      background: #1a4d8f;
+      color: white;
+      padding: 12px 10px;
+      text-align: left;
+      font-weight: 600;
+    }
+    th:first-child {
+      border-radius: 4px 0 0 0;
+    }
+    th:last-child {
+      border-radius: 0 4px 0 0;
+      text-align: center;
+    }
+    td {
+      padding: 12px 10px;
+      border-bottom: 1px solid #ddd;
+    }
+    td:last-child {
+      text-align: center;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background: #f9f9f9;
+    }
+    .item-id {
+      font-family: 'Courier New', monospace;
+      font-weight: 600;
+      color: #1a4d8f;
+    }
+    .summary {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .notes {
+      width: 55%;
+      padding: 15px;
+      background: #fff8e6;
+      border: 1px solid #ffd966;
+      border-radius: 4px;
+    }
+    .notes h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: #996600;
+      margin-bottom: 8px;
+    }
+    .totals {
+      width: 35%;
+      text-align: right;
+    }
+    .totals table {
+      margin-bottom: 0;
+    }
+    .totals td {
+      border: none;
+      padding: 8px 10px;
+    }
+    .totals tr:last-child {
+      background: #1a4d8f;
+      color: white;
+      font-size: 14px;
+    }
+    .totals tr:last-child td {
+      padding: 12px 10px;
+    }
+    .footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      color: #666;
+      font-size: 10px;
+    }
+    .barcode {
+      font-family: 'Libre Barcode 128', 'Courier New', monospace;
+      font-size: 40px;
+      letter-spacing: 2px;
+    }
+    @media print {
+      body {
+        padding: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="company-info">
+      <h1>ACME Industrial Supply</h1>
+      <p>
+        1847 Manufacturing Blvd, Suite 200<br>
+        Detroit, MI 48201<br>
+        Phone: (313) 555-0192<br>
+        orders@acmeindustrial.com
+      </p>
+    </div>
+    <div class="document-info">
+      <h2>PACKING SLIP</h2>
+      <p>
+        <strong>PO Number:</strong> 2024-78432<br>
+        <strong>Ship Date:</strong> January 14, 2025<br>
+        <strong>Order Date:</strong> January 10, 2025<br>
+        <strong>Carrier:</strong> FedEx Ground
+      </p>
+    </div>
+  </div>
+
+  <div class="addresses">
+    <div class="address-box">
+      <h3>Ship To</h3>
+      <p>
+        <strong>Midwest Manufacturing Co.</strong><br>
+        Attn: Receiving Dock B<br>
+        4521 Industrial Park Drive<br>
+        Columbus, OH 43215
+      </p>
+    </div>
+    <div class="address-box">
+      <h3>Bill To</h3>
+      <p>
+        <strong>Midwest Manufacturing Co.</strong><br>
+        Accounts Payable<br>
+        4521 Industrial Park Drive<br>
+        Columbus, OH 43215
+      </p>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 18%">Item #</th>
+        <th style="width: 52%">Description</th>
+        <th style="width: 15%">Unit</th>
+        <th style="width: 15%">Qty</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="item-id">BOLT-M8X25-SS</td>
+        <td>Hex Bolt M8x25mm Stainless Steel Grade A4-70</td>
+        <td>Box/100</td>
+        <td>12</td>
+      </tr>
+      <tr>
+        <td class="item-id">NUT-M8-SS</td>
+        <td>Hex Nut M8 Stainless Steel Grade A4-70</td>
+        <td>Box/100</td>
+        <td>12</td>
+      </tr>
+      <tr>
+        <td class="item-id">WASHER-M8-FL</td>
+        <td>Flat Washer M8 Zinc Plated Steel</td>
+        <td>Box/200</td>
+        <td>6</td>
+      </tr>
+      <tr>
+        <td class="item-id">BRG-6205-2RS</td>
+        <td>Ball Bearing 6205-2RS 25x52x15mm Sealed</td>
+        <td>Each</td>
+        <td>24</td>
+      </tr>
+      <tr>
+        <td class="item-id">SEAL-OR-42X3</td>
+        <td>O-Ring Seal 42mm ID x 3mm CS Viton</td>
+        <td>Pack/10</td>
+        <td>8</td>
+      </tr>
+      <tr>
+        <td class="item-id">GREASE-MP2-14</td>
+        <td>Multi-Purpose Grease NLGI #2, 14oz Cartridge</td>
+        <td>Each</td>
+        <td>36</td>
+      </tr>
+      <tr>
+        <td class="item-id">FILTER-HYD-10M</td>
+        <td>Hydraulic Filter Element 10 Micron</td>
+        <td>Each</td>
+        <td>4</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="summary">
+    <div class="notes">
+      <h3>Special Instructions</h3>
+      <p>
+        • Inspect all items upon receipt<br>
+        • Report any damage within 48 hours<br>
+        • Store bearings in original packaging until use<br>
+        • Keep grease cartridges at room temperature
+      </p>
+    </div>
+    <div class="totals">
+      <table>
+        <tr>
+          <td>Total Line Items:</td>
+          <td>7</td>
+        </tr>
+        <tr>
+          <td>Total Packages:</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <td><strong>Total Quantity:</strong></td>
+          <td><strong>102</strong></td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div>
+      <p>This packing slip is not an invoice. Invoice will be sent separately.</p>
+      <p>Questions? Contact orders@acmeindustrial.com or call (313) 555-0192</p>
+    </div>
+    <div style="text-align: right">
+      <p>Page 1 of 1</p>
+      <p>Generated: 01/14/2025 09:32:17 EST</p>
+    </div>
+  </div>
+</body>
+</html>
