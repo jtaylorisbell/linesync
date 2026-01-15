@@ -11,6 +11,8 @@ import {
   Plus,
   RotateCcw,
   Aperture,
+  Sparkles,
+  PackageCheck,
 } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import type { ParsedLineItem, BulkIntakeItem } from '../types/api';
@@ -43,6 +45,12 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
     success: boolean;
     message: string;
   } | null>(null);
+
+  // Animation states
+  const [showParseSuccess, setShowParseSuccess] = useState(false);
+  const [showSubmitSuccess, setShowSubmitSuccess] = useState(false);
+  const [parsedItemCount, setParsedItemCount] = useState(0);
+  const [submittedData, setSubmittedData] = useState<{ items: number; qty: number } | null>(null);
 
   // Start camera
   const startCamera = useCallback(async () => {
@@ -107,6 +115,13 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
         ship_date: data.ship_date,
         notes: data.notes,
       });
+
+      // Trigger parse success animation
+      if (items.length > 0) {
+        setParsedItemCount(items.length);
+        setShowParseSuccess(true);
+        setTimeout(() => setShowParseSuccess(false), 2000);
+      }
     },
   });
 
@@ -115,15 +130,23 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
     mutationFn: (items: BulkIntakeItem[]) =>
       api.createBulkIntake({ station_id: 'PACKING_SLIP', items }),
     onSuccess: (data) => {
-      setSubmitResult({
-        success: true,
-        message: `Successfully received ${data.total_items} items (${data.total_qty} total units)`,
-      });
-      // Reset to camera mode
-      handleRetake();
-      queryClient.invalidateQueries({ queryKey: ['inventory'] });
-      queryClient.invalidateQueries({ queryKey: ['events'] });
-      onComplete?.();
+      // Trigger submit success animation
+      setSubmittedData({ items: data.total_items, qty: data.total_qty });
+      setShowSubmitSuccess(true);
+
+      // After animation, reset to camera mode
+      setTimeout(() => {
+        setShowSubmitSuccess(false);
+        setSubmittedData(null);
+        setSubmitResult({
+          success: true,
+          message: `Successfully received ${data.total_items} items (${data.total_qty} total units)`,
+        });
+        handleRetake();
+        queryClient.invalidateQueries({ queryKey: ['inventory'] });
+        queryClient.invalidateQueries({ queryKey: ['events'] });
+        onComplete?.();
+      }, 2500);
     },
     onError: (error) => {
       const message =
@@ -294,6 +317,23 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
                   <Loader2 className="h-6 w-6 text-blue-500 animate-spin" />
                   <span className="text-gray-700 font-medium">
                     Analyzing with AI...
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Parse success animation */}
+            {showParseSuccess && (
+              <div className="absolute inset-0 bg-green-500/80 rounded-lg flex items-center justify-center animate-pulse pointer-events-none">
+                <div className="bg-white px-8 py-6 rounded-xl shadow-2xl flex flex-col items-center gap-3 animate-bounce">
+                  <div className="relative">
+                    <Sparkles className="h-12 w-12 text-green-500" />
+                    <div className="absolute -top-1 -right-1 bg-green-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center">
+                      {parsedItemCount}
+                    </div>
+                  </div>
+                  <span className="text-green-700 font-bold text-lg">
+                    {parsedItemCount} Items Found!
                   </span>
                 </div>
               </div>
@@ -519,6 +559,48 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
           >
             {submitResult.message}
           </p>
+        </div>
+      )}
+
+      {/* Full-screen submit success animation */}
+      {showSubmitSuccess && submittedData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div
+            className="bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4 transform transition-all duration-300"
+            style={{ animation: 'bounceIn 0.5s ease-out' }}
+          >
+            <style>{`
+              @keyframes bounceIn {
+                0% { transform: scale(0.3); opacity: 0; }
+                50% { transform: scale(1.05); }
+                70% { transform: scale(0.95); }
+                100% { transform: scale(1); opacity: 1; }
+              }
+            `}</style>
+            <div className="relative">
+              <div className="absolute inset-0 bg-green-400 rounded-full animate-ping opacity-25" />
+              <div className="relative bg-green-500 rounded-full p-4">
+                <PackageCheck className="h-16 w-16 text-white" />
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900">
+              Inventory Updated!
+            </h3>
+            <div className="flex gap-6 text-center">
+              <div>
+                <p className="text-3xl font-bold text-green-600">{submittedData.items}</p>
+                <p className="text-sm text-gray-500">Items</p>
+              </div>
+              <div className="w-px bg-gray-200" />
+              <div>
+                <p className="text-3xl font-bold text-green-600">{submittedData.qty}</p>
+                <p className="text-sm text-gray-500">Total Units</p>
+              </div>
+            </div>
+            <p className="text-gray-500 text-sm mt-2 animate-pulse">
+              Returning to camera...
+            </p>
+          </div>
         </div>
       )}
     </div>

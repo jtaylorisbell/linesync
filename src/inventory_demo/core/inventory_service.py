@@ -109,6 +109,10 @@ class InventoryService:
             on_hand_qty=on_hand_qty,
         )
 
+        # Auto-fulfill any OPEN replenishment signals if inventory is above reorder point
+        if on_hand_qty > self._settings.reorder_point:
+            self.db.fulfill_open_signals(parsed.item_id, event.event_id)
+
         return event, on_hand_qty
 
     def create_consume_event(

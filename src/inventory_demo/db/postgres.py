@@ -445,6 +445,55 @@ class PostgresDB:
                 )
                 return cur.fetchone() is not None
 
+    def fulfill_open_signals(
+        self, item_id: str, fulfill_event_id: UUID
+    ) -> list[ReplenishmentSignal]:
+        """Fulfill all OPEN signals for an item.
+
+        Args:
+            item_id: The item whose signals to fulfill
+            fulfill_event_id: The intake event that fulfilled the signals
+
+        Returns:
+            List of fulfilled signals
+        """
+        with self.session() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE replenishment_signals
+                    SET status = 'FULFILLED'
+                    WHERE item_id = %s AND status = 'OPEN'
+                    RETURNING signal_id, created_ts, item_id, current_qty,
+                              reorder_point, reorder_qty, status
+                    """,
+                    (item_id,),
+                )
+                rows = cur.fetchall()
+
+        signals = []
+        for row in rows:
+            signal = ReplenishmentSignal(
+                item_id=row[2],
+                current_qty=row[3],
+                reorder_point=row[4],
+                reorder_qty=row[5],
+                status=row[6],
+            )
+            signal.signal_id = row[0]
+            signal.created_ts = row[1]
+            signals.append(signal)
+
+        if signals:
+            logger.info(
+                "replenishment_signals_fulfilled",
+                item_id=item_id,
+                count=len(signals),
+                fulfill_event_id=str(fulfill_event_id),
+            )
+
+        return signals
+
 
 # Global database instance
 _db: PostgresDB | None = None
