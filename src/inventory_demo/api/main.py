@@ -393,8 +393,28 @@ async def create_bulk_intake(
     )
 
 
+# Resolve project root - works both locally and in Databricks Apps
+# Try multiple paths to handle different deployment scenarios
+def _find_project_root() -> Path:
+    """Find the project root directory."""
+    # Path from main.py going up 4 levels (src/inventory_demo/api/main.py -> root)
+    from_main = Path(__file__).parent.parent.parent.parent
+    if (from_main / "marketing").exists():
+        return from_main
+
+    # Path from current working directory (Databricks Apps sets cwd to files/)
+    from_cwd = Path.cwd()
+    if (from_cwd / "marketing").exists():
+        return from_cwd
+
+    # Fallback to the path from main.py even if marketing doesn't exist
+    return from_main
+
+
+PROJECT_ROOT = _find_project_root()
+
 # Serve marketing landing page at root
-marketing_dir = Path(__file__).parent.parent.parent.parent / "marketing"
+marketing_dir = PROJECT_ROOT / "marketing"
 if marketing_dir.exists():
 
     @app.get("/", response_class=FileResponse)
@@ -403,6 +423,6 @@ if marketing_dir.exists():
         return FileResponse(marketing_dir / "index.html")
 
 # Serve static files for frontend app (when built)
-frontend_dist = Path(__file__).parent.parent.parent.parent / "frontend" / "dist"
+frontend_dist = PROJECT_ROOT / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/app", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
