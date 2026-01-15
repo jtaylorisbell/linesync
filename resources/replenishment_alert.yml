@@ -1,33 +1,37 @@
-# resources:
-#   alerts:
-#     open_replenishment_signals:
-#       display_name: "Open Replenishment Signals
+resources:
+  alerts:
+    open_replenishment_signals:
+      display_name: "Open Replenishment Signals - ${bundle.target}"
 
-#       # Query to count open replenishment signals
-#       query_text: |
-#         SELECT COUNT(*) as open_count
-#         FROM ${var.lakebase_catalog}.${var.lakebase_schema}.replenishment_signals
-#         WHERE status = 'OPEN'
+      query_text: |
+        SELECT COUNT(*) as open_count
+        FROM ${var.lakebase_catalog}.${var.lakebase_schema}.replenishment_signals
+        WHERE status = 'OPEN'
 
-#       warehouse_id: ${var.sql_warehouse_id}
+      warehouse_id: 8d3e55aa7cea6427
 
-#       # Run every 5 minutes
-#       schedule:
-#         quartz_cron_expression: "0 */5 * * * ?"
-#         timezone_id: "America/Los_Angeles"
+      # Run every 5 minutes
+      schedule:
+        quartz_cron_schedule: "0 */5 * * * ?"
+        timezone_id: "America/New_York"
 
-#       # Alert when count > 0
-#       condition:
-#         op: GREATER_THAN
-#         operand:
-#           column:
-#             name: open_count
-#         threshold:
-#           value:
-#             double_value: 0
+      # Alert when count > 0
+      evaluation:
+        comparison_operator: "GREATER_THAN"
+        source:
+          name: "open_count"
+          aggregation: "MAX"
+          display: "open_count"
+        threshold:
+          value:
+            double_value: 0
+        notification:
+          notify_on_ok: false
+          retrigger_seconds: 0
+          subscriptions:
+            - destination_id: 7010c6e7-05c5-4ae9-8160-726f1f58a849
 
-#       custom_subject: "Replenishment Alert: Open signals detected"
-#       custom_body: |
-#         There are {{ query_result.open_count }} open replenishment signals that need attention.
-
-#         Please review and fulfill these signals to maintain inventory levels.
+      custom_summary: "Replenishment Alert: {{ query_result.open_count }} open signals"
+      custom_description: |
+        There are {{ query_result.open_count }} open replenishment signals that need attention.
+        Please review and fulfill these signals to maintain inventory levels.

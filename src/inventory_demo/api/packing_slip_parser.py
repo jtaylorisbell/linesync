@@ -74,10 +74,16 @@ class PackingSlipParser:
         """Initialize the parser with Databricks client."""
         from databricks.sdk import WorkspaceClient
 
-        self._workspace_client = WorkspaceClient()
+        from inventory_demo.config import get_settings
+
+        # Get workspace host from settings to ensure we use the correct workspace
+        settings = get_settings()
+        host = settings.databricks.host or None
+
+        self._workspace_client = WorkspaceClient(host=host)
         self._client = self._workspace_client.serving_endpoints.get_open_ai_client()
 
-        logger.info("packing_slip_parser_initialized", model="databricks-gpt-5-2")
+        logger.info("packing_slip_parser_initialized", model="databricks-gpt-5-2", host=host)
 
     def parse_image(
         self,

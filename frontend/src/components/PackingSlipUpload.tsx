@@ -13,6 +13,8 @@ import {
   Aperture,
   Sparkles,
   PackageCheck,
+  FileText,
+  Upload,
 } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import type { ParsedLineItem, BulkIntakeItem } from '../types/api';
@@ -25,15 +27,21 @@ interface PackingSlipUploadProps {
   onComplete?: () => void;
 }
 
+type InputMode = 'camera' | 'upload';
+
 export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
   const queryClient = useQueryClient();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [inputMode, setInputMode] = useState<InputMode>('camera');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [parsedItems, setParsedItems] = useState<EditableItem[]>([]);
   const [metadata, setMetadata] = useState<{
     vendor: string | null;
@@ -59,8 +67,10 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: 'environment',
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          // Portrait mode: swap width/height for vertical orientation
+          width: { ideal: 1080 },
+          height: { ideal: 1920 },
+          aspectRatio: { ideal: 9 / 16 },
         },
       });
 
@@ -88,19 +98,38 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
     setIsCameraActive(false);
   }, []);
 
-  // Initialize camera on mount
+  // Initialize camera on mount (only in camera mode)
   useEffect(() => {
-    startCamera();
-    return () => stopCamera();
-  }, [startCamera, stopCamera]);
+    if (inputMode === 'camera' && !capturedImage && !uploadedFile) {
+      startCamera();
+    }
+    return () => {
+      if (inputMode !== 'camera') {
+        stopCamera();
+      }
+    };
+  }, [inputMode, startCamera, stopCamera, capturedImage, uploadedFile]);
 
-  // Parse mutation
+  // Stop camera when switching to upload mode
+  useEffect(() => {
+    if (inputMode === 'upload') {
+      stopCamera();
+      setCameraError(null); // Clear any camera errors when switching modes
+    }
+  }, [inputMode, stopCamera]);
+
+  // Parse mutation - accepts either a data URL string or a File object
   const parseMutation = useMutation({
-    mutationFn: async (imageDataUrl: string) => {
-      // Convert data URL to blob
-      const response = await fetch(imageDataUrl);
-      const blob = await response.blob();
-      const file = new File([blob], 'packing-slip.jpg', { type: 'image/jpeg' });
+    mutationFn: async (input: string | File) => {
+      let file: File;
+      if (typeof input === 'string') {
+        // Convert data URL to blob
+        const response = await fetch(input);
+        const blob = await response.blob();
+        file = new File([blob], 'packing-slip.jpg', { type: 'image/jpeg' });
+      } else {
+        file = input;
+      }
       return api.parsePackingSlip(file);
     },
     onSuccess: (data) => {
@@ -183,15 +212,65 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
     }
   }, [stopCamera, parseMutation]);
 
-  // Retake photo
+  // Retake photo / clear upload
   const handleRetake = useCallback(() => {
     setCapturedImage(null);
+    setUploadedFile(null);
     setParsedItems([]);
     setMetadata(null);
     setSubmitResult(null);
     parseMutation.reset();
-    startCamera();
-  }, [startCamera, parseMutation]);
+    if (inputMode === 'camera') {
+      startCamera();
+    }
+  }, [startCamera, parseMutation, inputMode]);
+
+  // File upload handlers
+  const handleFileSelect = useCallback((file: File) => {
+    const validTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!validTypes.includes(file.type)) {
+      setSubmitResult({
+        success: false,
+        message: 'Please upload a PDF or image file (JPEG, PNG, WebP, GIF)',
+      });
+      return;
+    }
+
+    setUploadedFile(file);
+    setCapturedImage(null);
+    setSubmitResult(null);
+    parseMutation.mutate(file);
+  }, [parseMutation]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  }, [handleFileSelect]);
+
+  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  }, [handleFileSelect]);
 
   const handleItemChange = (
     id: string,
@@ -241,19 +320,19 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
     switch (confidence) {
       case 'high':
         return (
-          <span className="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-700">
+          <span className="badge badge-success">
             High
           </span>
         );
       case 'medium':
         return (
-          <span className="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-700">
+          <span className="badge badge-warning">
             Medium
           </span>
         );
       case 'low':
         return (
-          <span className="px-1.5 py-0.5 text-xs rounded bg-red-100 text-red-700">
+          <span className="badge badge-danger">
             Low
           </span>
         );
@@ -264,75 +343,170 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
 
   return (
     <div className="space-y-6">
-      {/* Camera / Captured Image View */}
+      {/* Mode Toggle */}
+      <div className="flex justify-center">
+        <div className="flex bg-[var(--bg-secondary)] rounded-xl p-1 border border-[var(--border-primary)]">
+          <button
+            onClick={() => setInputMode('camera')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              inputMode === 'camera'
+                ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)]'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <Camera className="h-4 w-4" />
+            Camera
+          </button>
+          <button
+            onClick={() => setInputMode('upload')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              inputMode === 'upload'
+                ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)]'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <Upload className="h-4 w-4" />
+            Upload File
+          </button>
+        </div>
+      </div>
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.webp,.gif,application/pdf,image/*"
+        onChange={handleFileInputChange}
+        className="hidden"
+      />
+
+      {/* Camera / Upload / Captured View */}
       <div className="relative w-full max-w-2xl mx-auto">
-        {!capturedImage ? (
-          <>
-            {/* Live camera feed */}
-            <video
-              ref={videoRef}
-              className="w-full rounded-lg bg-black"
-              style={{ minHeight: '400px' }}
-              playsInline
-              muted
-            />
+        {!capturedImage && !uploadedFile ? (
+          inputMode === 'camera' ? (
+            <>
+              {/* Live camera feed - portrait orientation */}
+              <video
+                ref={videoRef}
+                className="w-full max-w-md mx-auto rounded-xl bg-black border-2 border-[var(--border-primary)]"
+                style={{ minHeight: '500px', maxHeight: '70vh', objectFit: 'cover' }}
+                playsInline
+                muted
+              />
 
-            {/* Camera overlay */}
-            {isCameraActive && (
-              <div className="absolute inset-0 pointer-events-none">
-                {/* Corner guides */}
-                <div className="absolute top-4 left-4 w-12 h-12 border-l-4 border-t-4 border-white/70 rounded-tl-lg" />
-                <div className="absolute top-4 right-4 w-12 h-12 border-r-4 border-t-4 border-white/70 rounded-tr-lg" />
-                <div className="absolute bottom-4 left-4 w-12 h-12 border-l-4 border-b-4 border-white/70 rounded-bl-lg" />
-                <div className="absolute bottom-4 right-4 w-12 h-12 border-r-4 border-b-4 border-white/70 rounded-br-lg" />
-              </div>
-            )}
+              {/* Camera overlay */}
+              {isCameraActive && (
+                <div className="absolute inset-0 pointer-events-none">
+                  {/* Corner guides */}
+                  <div className="absolute top-4 left-4 w-12 h-12 border-l-2 border-t-2 border-[var(--accent-primary)] rounded-tl-lg" />
+                  <div className="absolute top-4 right-4 w-12 h-12 border-r-2 border-t-2 border-[var(--accent-primary)] rounded-tr-lg" />
+                  <div className="absolute bottom-16 left-4 w-12 h-12 border-l-2 border-b-2 border-[var(--accent-primary)] rounded-bl-lg" />
+                  <div className="absolute bottom-16 right-4 w-12 h-12 border-r-2 border-b-2 border-[var(--accent-primary)] rounded-br-lg" />
 
-            {/* Capture button */}
-            {isCameraActive && (
-              <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
-                <button
-                  onClick={handleCapture}
-                  className="p-4 bg-white rounded-full shadow-lg hover:bg-gray-100 transition-colors"
-                  title="Capture"
-                >
-                  <Aperture className="h-8 w-8 text-gray-800" />
-                </button>
+                  {/* Document icon hint */}
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-30">
+                    <FileText className="h-20 w-20 text-[var(--accent-primary)]" />
+                  </div>
+                </div>
+              )}
+
+              {/* Capture button */}
+              {isCameraActive && (
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
+                  <button
+                    onClick={handleCapture}
+                    className="p-4 bg-[var(--accent-primary)] rounded-full shadow-lg hover:scale-105 transition-transform glow-cyan"
+                    title="Capture"
+                  >
+                    <Aperture className="h-8 w-8 text-[var(--bg-primary)]" />
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            /* Drop zone for file upload */
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`flex flex-col items-center justify-center p-12 rounded-xl border-2 border-dashed cursor-pointer transition-all ${
+                isDragging
+                  ? 'border-[var(--accent-primary)] bg-[var(--accent-primary-dim)] scale-[1.02]'
+                  : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-[var(--accent-primary)] hover:bg-[var(--bg-hover)]'
+              }`}
+              style={{ minHeight: '300px' }}
+            >
+              <div className={`p-4 rounded-full mb-4 transition-colors ${
+                isDragging ? 'bg-[var(--accent-primary)]' : 'bg-[var(--bg-elevated)]'
+              }`}>
+                <Upload className={`h-10 w-10 ${
+                  isDragging ? 'text-[var(--bg-primary)]' : 'text-[var(--accent-primary)]'
+                }`} />
               </div>
-            )}
-          </>
+              <p className="text-lg font-medium text-[var(--text-primary)] mb-2">
+                {isDragging ? 'Drop your file here' : 'Drag & drop a file here'}
+              </p>
+              <p className="text-sm text-[var(--text-muted)] mb-4">
+                or click to browse
+              </p>
+              <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                <FileText className="h-4 w-4" />
+                <span>PDF, JPEG, PNG, WebP, GIF</span>
+              </div>
+            </div>
+          )
         ) : (
           <>
-            {/* Captured image */}
-            <img
-              src={capturedImage}
-              alt="Captured packing slip"
-              className="w-full rounded-lg"
-            />
+            {/* Captured image or uploaded file display */}
+            {capturedImage ? (
+              <img
+                src={capturedImage}
+                alt="Captured packing slip"
+                className="w-full rounded-xl border-2 border-[var(--border-primary)]"
+              />
+            ) : uploadedFile ? (
+              <div className="flex flex-col items-center justify-center p-8 rounded-xl border-2 border-[var(--border-primary)] bg-[var(--bg-secondary)]" style={{ minHeight: '200px' }}>
+                <div className="p-4 rounded-full bg-[var(--accent-primary-dim)] mb-4">
+                  <FileText className="h-12 w-12 text-[var(--accent-primary)]" />
+                </div>
+                <p className="text-lg font-medium text-[var(--text-primary)] mb-1">
+                  {uploadedFile.name}
+                </p>
+                <p className="text-sm text-[var(--text-muted)]">
+                  {(uploadedFile.size / 1024).toFixed(1)} KB
+                </p>
+              </div>
+            ) : null}
 
             {/* Parsing overlay */}
             {parseMutation.isPending && (
-              <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                <div className="bg-white px-6 py-4 rounded-lg flex items-center gap-3">
-                  <Loader2 className="h-6 w-6 text-blue-500 animate-spin" />
-                  <span className="text-gray-700 font-medium">
-                    Analyzing with AI...
-                  </span>
+              <div className="absolute inset-0 bg-black/70 rounded-xl flex items-center justify-center">
+                <div className="bg-[var(--bg-elevated)] px-6 py-4 rounded-xl flex items-center gap-3 border border-[var(--accent-primary)] glow-cyan">
+                  <Loader2 className="h-6 w-6 text-[var(--accent-primary)] animate-spin" />
+                  <div>
+                    <span className="text-[var(--text-primary)] font-medium block">
+                      Analyzing with AI...
+                    </span>
+                    <span className="text-xs text-[var(--text-muted)]">
+                      Extracting line items
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
 
             {/* Parse success animation */}
             {showParseSuccess && (
-              <div className="absolute inset-0 bg-green-500/80 rounded-lg flex items-center justify-center animate-pulse pointer-events-none">
-                <div className="bg-white px-8 py-6 rounded-xl shadow-2xl flex flex-col items-center gap-3 animate-bounce">
+              <div className="absolute inset-0 bg-[var(--accent-success)]/80 rounded-xl flex items-center justify-center animate-pulse pointer-events-none">
+                <div className="bg-[var(--bg-primary)] px-8 py-6 rounded-xl shadow-2xl flex flex-col items-center gap-3 animate-bounce border border-[var(--accent-success)] glow-green">
                   <div className="relative">
-                    <Sparkles className="h-12 w-12 text-green-500" />
-                    <div className="absolute -top-1 -right-1 bg-green-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center">
+                    <Sparkles className="h-12 w-12 text-[var(--accent-success)]" />
+                    <div className="absolute -top-1 -right-1 bg-[var(--accent-success)] text-[var(--bg-primary)] text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center">
                       {parsedItemCount}
                     </div>
                   </div>
-                  <span className="text-green-700 font-bold text-lg">
+                  <span className="text-[var(--accent-success)] font-bold text-lg">
                     {parsedItemCount} Items Found!
                   </span>
                 </div>
@@ -342,10 +516,10 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
             {/* Retake button */}
             <button
               onClick={handleRetake}
-              className="absolute top-4 right-4 p-2 bg-white/90 rounded-lg shadow hover:bg-white transition-colors"
+              className="absolute top-4 right-4 p-2 bg-[var(--bg-elevated)]/90 rounded-xl border border-[var(--border-primary)] hover:border-[var(--accent-primary)] transition-colors"
               title="Retake"
             >
-              <RotateCcw className="h-5 w-5 text-gray-700" />
+              <RotateCcw className="h-5 w-5 text-[var(--text-primary)]" />
             </button>
           </>
         )}
@@ -354,25 +528,30 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
         <canvas ref={canvasRef} className="hidden" />
       </div>
 
-      {/* Camera status */}
-      {!capturedImage && (
+      {/* Camera status - only show in camera mode */}
+      {!capturedImage && !uploadedFile && inputMode === 'camera' && (
         <div className="flex items-center justify-center gap-2">
           {isCameraActive ? (
             <>
-              <Camera className="h-5 w-5 text-green-500" />
-              <span className="text-green-600">
+              <div className="relative">
+                <Camera className="h-5 w-5 text-[var(--accent-success)]" />
+                <div className="absolute inset-0 animate-ping">
+                  <Camera className="h-5 w-5 text-[var(--accent-success)]" />
+                </div>
+              </div>
+              <span className="text-[var(--accent-success)]">
                 Position packing slip in frame and tap capture
               </span>
             </>
           ) : cameraError ? (
             <>
-              <CameraOff className="h-5 w-5 text-red-500" />
-              <span className="text-red-600">{cameraError}</span>
+              <CameraOff className="h-5 w-5 text-[var(--accent-danger)]" />
+              <span className="text-[var(--accent-danger)]">{cameraError}</span>
             </>
           ) : (
             <>
-              <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
-              <span className="text-gray-500">Starting camera...</span>
+              <Loader2 className="h-5 w-5 text-[var(--text-muted)] animate-spin" />
+              <span className="text-[var(--text-muted)]">Starting camera...</span>
             </>
           )}
         </div>
@@ -380,13 +559,13 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
 
       {/* Parse Error */}
       {parseMutation.isError && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-          <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+        <div className="p-4 bg-[var(--accent-danger-dim)] border border-[var(--accent-danger)] rounded-xl flex items-start gap-3">
+          <AlertCircle className="h-5 w-5 text-[var(--accent-danger)] flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-medium text-red-800">
+            <p className="text-sm font-medium text-[var(--accent-danger)]">
               Failed to parse packing slip
             </p>
-            <p className="text-sm text-red-600 mt-1">
+            <p className="text-sm text-[var(--text-secondary)] mt-1">
               {parseMutation.error instanceof ApiError
                 ? parseMutation.error.message
                 : 'An error occurred. Try capturing a clearer image.'}
@@ -398,32 +577,32 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
       {/* Metadata */}
       {metadata &&
         (metadata.vendor || metadata.po_number || metadata.ship_date) && (
-          <div className="p-4 bg-gray-50 rounded-lg">
-            <h4 className="text-sm font-medium text-gray-700 mb-2">
+          <div className="p-4 bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-xl">
+            <h4 className="text-sm font-medium text-[var(--text-secondary)] mb-3">
               Document Info
             </h4>
             <div className="grid grid-cols-3 gap-4 text-sm">
               {metadata.vendor && (
                 <div>
-                  <span className="text-gray-500">Vendor:</span>{' '}
-                  <span className="font-medium">{metadata.vendor}</span>
+                  <span className="text-[var(--text-muted)]">Vendor:</span>{' '}
+                  <span className="font-medium text-[var(--text-primary)]">{metadata.vendor}</span>
                 </div>
               )}
               {metadata.po_number && (
                 <div>
-                  <span className="text-gray-500">PO #:</span>{' '}
-                  <span className="font-medium">{metadata.po_number}</span>
+                  <span className="text-[var(--text-muted)]">PO #:</span>{' '}
+                  <span className="font-medium text-[var(--accent-primary)] font-mono">{metadata.po_number}</span>
                 </div>
               )}
               {metadata.ship_date && (
                 <div>
-                  <span className="text-gray-500">Ship Date:</span>{' '}
-                  <span className="font-medium">{metadata.ship_date}</span>
+                  <span className="text-[var(--text-muted)]">Ship Date:</span>{' '}
+                  <span className="font-medium text-[var(--text-primary)]">{metadata.ship_date}</span>
                 </div>
               )}
             </div>
             {metadata.notes && (
-              <p className="text-sm text-amber-600 mt-2 flex items-center gap-1">
+              <p className="text-sm text-[var(--accent-warning)] mt-3 flex items-center gap-1">
                 <AlertCircle className="h-4 w-4" />
                 {metadata.notes}
               </p>
@@ -433,22 +612,27 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
 
       {/* Parsed Items Form */}
       {parsedItems.length > 0 && (
-        <div className="border border-gray-200 rounded-lg overflow-hidden">
-          <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
-            <h4 className="text-sm font-medium text-gray-700">
+        <div className="border border-[var(--border-primary)] rounded-xl overflow-hidden">
+          <div className="bg-[var(--bg-elevated)] px-4 py-3 border-b border-[var(--border-primary)]">
+            <h4 className="text-sm font-medium text-[var(--text-primary)]">
               Review Items ({parsedItems.length})
             </h4>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-[var(--text-muted)] mt-1">
               Edit or remove items before submitting
             </p>
           </div>
 
-          <div className="divide-y divide-gray-100">
-            {parsedItems.map((item) => (
-              <div key={item.id} className="p-4 flex items-center gap-4">
-                <div className="flex-1 grid grid-cols-12 gap-3 items-center">
-                  <div className="col-span-5">
-                    <label className="text-xs text-gray-500 block mb-1">
+          <div className="divide-y divide-[var(--border-primary)]">
+            {parsedItems.map((item, index) => (
+              <div
+                key={item.id}
+                className="p-4 bg-[var(--bg-secondary)] hover:bg-[var(--bg-hover)] transition-colors animate-slide-in"
+                style={{ animationDelay: `${index * 50}ms` }}
+              >
+                <div className="flex items-start gap-4">
+                  {/* Item ID */}
+                  <div className="w-48 shrink-0">
+                    <label className="text-xs text-[var(--text-muted)] block mb-1">
                       Item ID
                     </label>
                     <input
@@ -457,12 +641,13 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
                       onChange={(e) =>
                         handleItemChange(item.id, 'item_id', e.target.value)
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 text-sm font-mono"
                       placeholder="Part number"
                     />
                   </div>
-                  <div className="col-span-2">
-                    <label className="text-xs text-gray-500 block mb-1">
+                  {/* Qty */}
+                  <div className="w-20 shrink-0">
+                    <label className="text-xs text-[var(--text-muted)] block mb-1">
                       Qty
                     </label>
                     <input
@@ -472,54 +657,52 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
                       onChange={(e) =>
                         handleItemChange(item.id, 'qty', e.target.value)
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 text-sm font-mono"
                     />
                   </div>
-                  <div className="col-span-4">
-                    {item.description && (
-                      <div>
-                        <label className="text-xs text-gray-500 block mb-1">
-                          Description
-                        </label>
-                        <p className="text-sm text-gray-600 truncate">
-                          {item.description}
-                        </p>
-                      </div>
-                    )}
+                  {/* Description & Confidence */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs text-[var(--text-muted)]">
+                        Description
+                      </label>
+                      {getConfidenceBadge(item.confidence)}
+                    </div>
+                    <p className="text-sm text-[var(--text-secondary)] truncate" title={item.description || ''}>
+                      {item.description || '—'}
+                    </p>
                   </div>
-                  <div className="col-span-1 flex items-center justify-end">
-                    {getConfidenceBadge(item.confidence)}
-                  </div>
+                  {/* Delete button */}
+                  <button
+                    onClick={() => handleRemoveItem(item.id)}
+                    className="p-2 text-[var(--text-muted)] hover:text-[var(--accent-danger)] hover:bg-[var(--accent-danger-dim)] rounded-lg transition-colors shrink-0 mt-5"
+                    title="Remove item"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
-                <button
-                  onClick={() => handleRemoveItem(item.id)}
-                  className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg"
-                  title="Remove item"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
               </div>
             ))}
           </div>
 
-          <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+          <div className="px-4 py-3 bg-[var(--bg-elevated)] border-t border-[var(--border-primary)] flex items-center justify-between">
             <button
               onClick={handleAddItem}
-              className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
+              className="text-sm text-[var(--accent-primary)] hover:text-[var(--text-primary)] flex items-center gap-1 transition-colors"
             >
               <Plus className="h-4 w-4" />
               Add item
             </button>
 
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-gray-500">
-                Total: {parsedItems.reduce((sum, item) => sum + item.qty, 0)}{' '}
+            <div className="flex items-center gap-4">
+              <span className="text-sm text-[var(--text-muted)]">
+                Total: <span className="font-mono font-bold text-[var(--accent-primary)]">{parsedItems.reduce((sum, item) => sum + item.qty, 0)}</span>{' '}
                 units
               </span>
               <button
                 onClick={handleSubmit}
                 disabled={submitMutation.isPending || parsedItems.length === 0}
-                className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {submitMutation.isPending ? (
                   <>
@@ -541,20 +724,20 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
       {/* Submit Result */}
       {submitResult && (
         <div
-          className={`p-4 rounded-lg flex items-start gap-3 ${
+          className={`p-4 rounded-xl flex items-start gap-3 ${
             submitResult.success
-              ? 'bg-green-50 border border-green-200'
-              : 'bg-red-50 border border-red-200'
+              ? 'bg-[var(--accent-success-dim)] border border-[var(--accent-success)]'
+              : 'bg-[var(--accent-danger-dim)] border border-[var(--accent-danger)]'
           }`}
         >
           {submitResult.success ? (
-            <Check className="h-5 w-5 text-green-500 flex-shrink-0 mt-0.5" />
+            <Check className="h-5 w-5 text-[var(--accent-success)] flex-shrink-0 mt-0.5" />
           ) : (
-            <X className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+            <X className="h-5 w-5 text-[var(--accent-danger)] flex-shrink-0 mt-0.5" />
           )}
           <p
             className={`text-sm font-medium ${
-              submitResult.success ? 'text-green-800' : 'text-red-800'
+              submitResult.success ? 'text-[var(--accent-success)]' : 'text-[var(--accent-danger)]'
             }`}
           >
             {submitResult.message}
@@ -564,42 +747,46 @@ export function PackingSlipUpload({ onComplete }: PackingSlipUploadProps) {
 
       {/* Full-screen submit success animation */}
       {showSubmitSuccess && submittedData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div
-            className="bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4 transform transition-all duration-300"
-            style={{ animation: 'bounceIn 0.5s ease-out' }}
-          >
-            <style>{`
-              @keyframes bounceIn {
-                0% { transform: scale(0.3); opacity: 0; }
-                50% { transform: scale(1.05); }
-                70% { transform: scale(0.95); }
-                100% { transform: scale(1); opacity: 1; }
-              }
-            `}</style>
-            <div className="relative">
-              <div className="absolute inset-0 bg-green-400 rounded-full animate-ping opacity-25" />
-              <div className="relative bg-green-500 rounded-full p-4">
-                <PackageCheck className="h-16 w-16 text-white" />
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
+          <div className="relative">
+            {/* Pulsing rings */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="absolute w-80 h-80 rounded-full border-2 border-[var(--accent-success)] animate-ping-slow opacity-30" />
+              <div className="absolute w-64 h-64 rounded-full border-2 border-[var(--accent-success)] animate-ping-slower opacity-40" />
             </div>
-            <h3 className="text-2xl font-bold text-gray-900">
-              Inventory Updated!
-            </h3>
-            <div className="flex gap-6 text-center">
-              <div>
-                <p className="text-3xl font-bold text-green-600">{submittedData.items}</p>
-                <p className="text-sm text-gray-500">Items</p>
+
+            {/* Main card */}
+            <div className="relative bg-gradient-to-br from-[var(--accent-success)] to-emerald-600 rounded-2xl p-8 shadow-2xl animate-bounce-in max-w-sm glow-green">
+              <div className="flex justify-center mb-4">
+                <div className="relative bg-white/20 rounded-full p-4">
+                  <PackageCheck className="h-16 w-16 text-white" />
+                  <div className="absolute inset-0 bg-white/20 rounded-full animate-ping" />
+                </div>
               </div>
-              <div className="w-px bg-gray-200" />
-              <div>
-                <p className="text-3xl font-bold text-green-600">{submittedData.qty}</p>
-                <p className="text-sm text-gray-500">Total Units</p>
+
+              <h3 className="text-2xl font-bold text-white text-center mb-2">
+                Inventory Updated!
+              </h3>
+              <p className="text-white/80 text-center text-sm mb-6">
+                Packing slip processed successfully
+              </p>
+
+              <div className="flex gap-6 justify-center">
+                <div className="text-center">
+                  <p className="text-4xl font-bold text-white font-mono">{submittedData.items}</p>
+                  <p className="text-sm text-white/70">Items</p>
+                </div>
+                <div className="w-px bg-white/30" />
+                <div className="text-center">
+                  <p className="text-4xl font-bold text-white font-mono">{submittedData.qty}</p>
+                  <p className="text-sm text-white/70">Total Units</p>
+                </div>
               </div>
+
+              <p className="text-white/60 text-sm mt-6 text-center animate-pulse">
+                Returning to camera...
+              </p>
             </div>
-            <p className="text-gray-500 text-sm mt-2 animate-pulse">
-              Returning to camera...
-            </p>
           </div>
         </div>
       )}

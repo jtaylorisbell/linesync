@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownToLine, User, Camera, FileImage } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { ArrowDownToLine, Camera, Sparkles, ScanLine, Info } from 'lucide-react';
 import { BarcodeScanner } from './BarcodeScanner';
 import { PackingSlipUpload } from './PackingSlipUpload';
 import { api, ApiError } from '../api/client';
@@ -17,11 +17,6 @@ export function IntakePage() {
   const [mode, setMode] = useState<IntakeMode>('scan');
   const [lastResult, setLastResult] = useState<ScanResult | null>(null);
 
-  const { data: currentUser } = useQuery({
-    queryKey: ['me'],
-    queryFn: () => api.getMe(),
-  });
-
   const intakeMutation = useMutation({
     mutationFn: (barcode: string) =>
       api.createIntakeEvent({
@@ -33,7 +28,6 @@ export function IntakePage() {
         success: true,
         message: `Received ${data.qty} units of ${data.item_id}. On-hand: ${data.on_hand_qty}`,
       });
-      // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['inventory'] });
       queryClient.invalidateQueries({ queryKey: ['events'] });
     },
@@ -57,50 +51,54 @@ export function IntakePage() {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-green-100 rounded-lg">
-            <ArrowDownToLine className="h-6 w-6 text-green-600" />
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">Intake</h2>
-            <p className="text-gray-500">Receive inventory via scan or packing slip</p>
+      {/* Page Header */}
+      <div className="flex items-center gap-4 mb-8">
+        <div className="relative">
+          <div className="absolute inset-0 bg-[var(--accent-success)] blur-xl opacity-30" />
+          <div className="relative p-3 bg-[var(--accent-success-dim)] border border-[var(--accent-success)] rounded-xl">
+            <ArrowDownToLine className="h-7 w-7 text-[var(--accent-success)]" />
           </div>
         </div>
-        {currentUser && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-gray-100 rounded-lg">
-            <User className="h-4 w-4 text-gray-600" />
-            <span className="text-sm font-medium text-gray-700">
-              {currentUser.display_name}
-            </span>
-          </div>
-        )}
+        <div>
+          <h2 className="text-3xl font-bold text-[var(--text-primary)]">Receive Inventory</h2>
+          <p className="text-[var(--text-muted)]">Scan barcodes or upload packing slips to add stock</p>
+        </div>
       </div>
 
       {/* Mode Toggle */}
-      <div className="max-w-lg mx-auto mb-6">
-        <div className="flex bg-gray-100 rounded-lg p-1">
+      <div className="max-w-xl mx-auto mb-8">
+        <div className="flex bg-[var(--bg-secondary)] rounded-2xl p-1.5 border border-[var(--border-primary)]">
           <button
             onClick={() => setMode('scan')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-xl text-sm font-medium transition-all duration-300 ${
               mode === 'scan'
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
+                ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] glow-cyan'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
             }`}
           >
-            <Camera className="h-4 w-4" />
-            Scan Barcode
+            <ScanLine className="h-5 w-5" />
+            <div className="text-left">
+              <span className="block font-semibold">Scan Barcode</span>
+              <span className={`text-xs ${mode === 'scan' ? 'text-[var(--bg-primary)]/70' : 'text-[var(--text-muted)]'}`}>
+                Use camera to scan
+              </span>
+            </div>
           </button>
           <button
             onClick={() => setMode('packing-slip')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-xl text-sm font-medium transition-all duration-300 ${
               mode === 'packing-slip'
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
+                ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] glow-cyan'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
             }`}
           >
-            <FileImage className="h-4 w-4" />
-            Packing Slip
+            <Sparkles className="h-5 w-5" />
+            <div className="text-left">
+              <span className="block font-semibold">AI Packing Slip</span>
+              <span className={`text-xs ${mode === 'packing-slip' ? 'text-[var(--bg-primary)]/70' : 'text-[var(--text-muted)]'}`}>
+                Upload document
+              </span>
+            </div>
           </button>
         </div>
       </div>
@@ -108,29 +106,49 @@ export function IntakePage() {
       {/* Content based on mode */}
       {mode === 'scan' ? (
         <>
-          <div className="max-w-lg mx-auto">
-            <BarcodeScanner
-              onScan={handleScan}
-              isProcessing={intakeMutation.isPending}
-              lastResult={lastResult}
-            />
+          <div className="max-w-xl mx-auto">
+            <div className="card-dark p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <Camera className="h-5 w-5 text-[var(--accent-primary)]" />
+                <h3 className="font-semibold text-[var(--text-primary)]">Barcode Scanner</h3>
+              </div>
+              <BarcodeScanner
+                onScan={handleScan}
+                isProcessing={intakeMutation.isPending}
+                lastResult={lastResult}
+              />
+            </div>
           </div>
 
-          <div className="mt-8 max-w-lg mx-auto">
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <h3 className="font-medium text-gray-700 mb-2">Expected Barcode Format</h3>
-              <code className="text-sm bg-white px-2 py-1 rounded border">
-                ITEM=&lt;item_id&gt;;QTY=&lt;quantity&gt;
-              </code>
-              <p className="text-sm text-gray-500 mt-2">
-                Example: <code className="bg-white px-1 rounded">ITEM=PART-88219;QTY=24</code>
-              </p>
+          <div className="mt-6 max-w-xl mx-auto">
+            <div className="p-4 bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-xl">
+              <div className="flex items-start gap-3">
+                <Info className="h-5 w-5 text-[var(--accent-primary)] mt-0.5" />
+                <div>
+                  <h4 className="font-medium text-[var(--text-primary)] mb-1">Barcode Format</h4>
+                  <code className="text-sm text-[var(--accent-primary)] bg-[var(--bg-elevated)] px-2 py-1 rounded border border-[var(--border-primary)]">
+                    ITEM=&lt;part_number&gt;;QTY=&lt;quantity&gt;
+                  </code>
+                  <p className="text-sm text-[var(--text-muted)] mt-2">
+                    Example: <code className="text-[var(--accent-success)] bg-[var(--bg-elevated)] px-1 rounded">ITEM=PART-88219;QTY=24</code>
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </>
       ) : (
         <div className="max-w-2xl mx-auto">
-          <PackingSlipUpload />
+          <div className="card-dark p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Sparkles className="h-5 w-5 text-[var(--accent-primary)]" />
+              <h3 className="font-semibold text-[var(--text-primary)]">AI-Powered Document Processing</h3>
+            </div>
+            <p className="text-[var(--text-muted)] mb-6">
+              Upload a photo of your packing slip and our AI will automatically extract all line items.
+            </p>
+            <PackingSlipUpload />
+          </div>
         </div>
       )}
     </div>

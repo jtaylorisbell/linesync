@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Camera, CameraOff, CheckCircle2, XCircle, Loader2, ScanLine } from 'lucide-react';
+import { Camera, CameraOff, CheckCircle2, XCircle, Loader2, Zap } from 'lucide-react';
 
 interface ScanResult {
   success: boolean;
@@ -151,12 +151,12 @@ export function BarcodeScanner({
   return (
     <div className="flex flex-col items-center">
       {/* Camera viewport */}
-      <div className="relative w-full max-w-lg">
+      <div className="relative w-full">
         {/* Video element for camera feed */}
         <video
           ref={videoRef}
-          className="w-full rounded-lg bg-black"
-          style={{ minHeight: '350px' }}
+          className="w-full rounded-xl bg-black border-2 border-[var(--border-primary)]"
+          style={{ minHeight: '320px' }}
           playsInline
           muted
         />
@@ -167,19 +167,26 @@ export function BarcodeScanner({
         {/* Scanning overlay */}
         {isScanning && (
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-            <div className="relative w-72 h-36 border-2 border-green-400 rounded-lg">
+            {/* Scan frame */}
+            <div className="relative w-72 h-36">
+              {/* Corner brackets */}
+              <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-[var(--accent-primary)] rounded-tl-lg" />
+              <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-[var(--accent-primary)] rounded-tr-lg" />
+              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-[var(--accent-primary)] rounded-bl-lg" />
+              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-[var(--accent-primary)] rounded-br-lg" />
+
               {/* Animated scan line */}
-              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-green-400 animate-pulse" />
+              <div className="scan-line" />
             </div>
           </div>
         )}
 
         {/* Flash effect on successful scan */}
         {showFlash && (
-          <div className="absolute inset-0 bg-green-400/40 rounded-lg pointer-events-none z-50 flex items-center justify-center">
-            <div className="px-6 py-3 bg-green-500 text-white rounded-full text-lg font-semibold shadow-xl flex items-center gap-2 animate-bounce">
-              <ScanLine className="h-5 w-5" />
-              Captured!
+          <div className="absolute inset-0 bg-[var(--accent-primary)]/30 rounded-xl pointer-events-none z-50 flex items-center justify-center glow-cyan">
+            <div className="px-6 py-3 bg-[var(--accent-primary)] text-[var(--bg-primary)] rounded-full text-lg font-bold shadow-xl flex items-center gap-2 animate-bounce">
+              <Zap className="h-5 w-5" />
+              Scanned!
             </div>
           </div>
         )}
@@ -189,48 +196,53 @@ export function BarcodeScanner({
       <div className="mt-4 flex items-center gap-2">
         {isScanning ? (
           <>
-            <Camera className="h-5 w-5 text-green-500 animate-pulse" />
-            <span className="text-green-600">Camera active - point at barcode</span>
+            <div className="relative">
+              <Camera className="h-5 w-5 text-[var(--accent-success)]" />
+              <div className="absolute inset-0 animate-ping">
+                <Camera className="h-5 w-5 text-[var(--accent-success)]" />
+              </div>
+            </div>
+            <span className="text-[var(--accent-success)]">Camera active — point at barcode</span>
           </>
         ) : (
           <>
-            <CameraOff className="h-5 w-5 text-gray-400" />
-            <span className="text-gray-500">Starting camera...</span>
+            <CameraOff className="h-5 w-5 text-[var(--text-muted)]" />
+            <span className="text-[var(--text-muted)]">Starting camera...</span>
           </>
         )}
       </div>
 
       {/* Error display */}
       {error && (
-        <div className="mt-2 px-4 py-2 bg-red-50 border border-red-200 rounded-lg">
-          <span className="text-red-600 text-sm">{error}</span>
+        <div className="mt-3 px-4 py-2 bg-[var(--accent-danger-dim)] border border-[var(--accent-danger)] rounded-xl">
+          <span className="text-[var(--accent-danger)] text-sm">{error}</span>
         </div>
       )}
 
       {/* Processing indicator */}
       {isProcessing && (
-        <div className="mt-4 flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-          <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />
-          <span className="text-blue-600">Processing scan...</span>
+        <div className="mt-4 flex items-center gap-2 px-4 py-2 bg-[var(--accent-primary-dim)] border border-[var(--accent-primary)] rounded-xl">
+          <Loader2 className="h-5 w-5 text-[var(--accent-primary)] animate-spin" />
+          <span className="text-[var(--accent-primary)]">Processing...</span>
         </div>
       )}
 
       {/* Last scan result */}
       {lastResult && !isProcessing && (
         <div
-          className={`mt-4 px-6 py-3 rounded-lg flex items-center gap-2 transition-all ${
+          className={`mt-4 px-6 py-3 rounded-xl flex items-center gap-3 transition-all animate-slide-in ${
             lastResult.success
-              ? 'bg-green-50 border border-green-200'
-              : 'bg-red-50 border border-red-200'
+              ? 'bg-[var(--accent-success-dim)] border border-[var(--accent-success)]'
+              : 'bg-[var(--accent-danger-dim)] border border-[var(--accent-danger)]'
           }`}
         >
           {lastResult.success ? (
-            <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+            <CheckCircle2 className="h-5 w-5 text-[var(--accent-success)] shrink-0" />
           ) : (
-            <XCircle className="h-5 w-5 text-red-500 shrink-0" />
+            <XCircle className="h-5 w-5 text-[var(--accent-danger)] shrink-0" />
           )}
           <span
-            className={lastResult.success ? 'text-green-700' : 'text-red-700'}
+            className={lastResult.success ? 'text-[var(--accent-success)]' : 'text-[var(--accent-danger)]'}
           >
             {lastResult.message}
           </span>

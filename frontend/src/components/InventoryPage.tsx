@@ -10,6 +10,9 @@ import {
   Activity,
   AlertCircle,
   CheckCircle2,
+  Boxes,
+  Bell,
+  Sparkles,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { api } from '../api/client';
@@ -29,65 +32,78 @@ function getStockStatus(qty: number, belowReorder: boolean): StockStatus {
 function StockStatusBadge({ status }: { status: StockStatus }) {
   const config = {
     critical: {
-      bg: 'bg-red-100',
-      text: 'text-red-700',
+      classes: 'badge-danger',
       label: 'Critical',
       icon: AlertCircle,
     },
     low: {
-      bg: 'bg-amber-100',
-      text: 'text-amber-700',
+      classes: 'badge-warning',
       label: 'Low',
       icon: AlertTriangle,
     },
     ok: {
-      bg: 'bg-green-100',
-      text: 'text-green-700',
+      classes: 'badge-success',
       label: 'OK',
       icon: CheckCircle2,
     },
   };
 
-  const { bg, text, label, icon: Icon } = config[status];
+  const { classes, label, icon: Icon } = config[status];
 
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${bg} ${text}`}>
+    <span className={`badge ${classes}`}>
       <Icon className="h-3 w-3" />
       {label}
     </span>
   );
 }
 
-function SummaryCard({
+function StatCard({
   title,
   value,
   icon: Icon,
-  color,
+  variant = 'default',
   subtitle,
+  trend,
 }: {
   title: string;
   value: string | number;
   icon: React.ElementType;
-  color: 'blue' | 'red' | 'green' | 'amber';
+  variant?: 'default' | 'success' | 'warning' | 'danger';
   subtitle?: string;
+  trend?: 'up' | 'down';
 }) {
-  const colors = {
-    blue: 'bg-blue-100 text-blue-600',
-    red: 'bg-red-100 text-red-600',
-    green: 'bg-green-100 text-green-600',
-    amber: 'bg-amber-100 text-amber-600',
+  const variantClasses = {
+    default: 'stat-card',
+    success: 'stat-card stat-card-success',
+    warning: 'stat-card stat-card-warning',
+    danger: 'stat-card stat-card-danger',
+  };
+
+  const iconColors = {
+    default: 'text-[var(--accent-primary)]',
+    success: 'text-[var(--accent-success)]',
+    warning: 'text-[var(--accent-warning)]',
+    danger: 'text-[var(--accent-danger)]',
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border p-4">
-      <div className="flex items-center gap-3">
-        <div className={`p-2 rounded-lg ${colors[color]}`}>
-          <Icon className="h-5 w-5" />
-        </div>
+    <div className={`${variantClasses[variant]} p-5 transition-all duration-300 hover:scale-[1.02]`}>
+      <div className="flex items-start justify-between">
         <div>
-          <p className="text-sm text-gray-500">{title}</p>
-          <p className="text-2xl font-bold text-gray-900">{value}</p>
-          {subtitle && <p className="text-xs text-gray-400">{subtitle}</p>}
+          <p className="text-sm text-[var(--text-muted)] uppercase tracking-wide font-medium">{title}</p>
+          <div className="flex items-baseline gap-2 mt-1">
+            <p className="text-3xl font-bold text-[var(--text-primary)] animate-count">{value}</p>
+            {trend && (
+              <span className={trend === 'up' ? 'text-[var(--accent-success)]' : 'text-[var(--accent-danger)]'}>
+                {trend === 'up' ? <TrendingDown className="h-4 w-4 rotate-180" /> : <TrendingDown className="h-4 w-4" />}
+              </span>
+            )}
+          </div>
+          {subtitle && <p className="text-xs text-[var(--text-muted)] mt-1">{subtitle}</p>}
+        </div>
+        <div className={`p-3 rounded-xl bg-[var(--bg-elevated)] ${iconColors[variant]}`}>
+          <Icon className="h-6 w-6" />
         </div>
       </div>
     </div>
@@ -101,15 +117,6 @@ function formatRelativeTime(ts: string | null): string {
   } catch {
     return '-';
   }
-}
-
-function calculateConsumptionRate(intake: number, consume: number): string {
-  if (consume === 0) return '-';
-  // Simple rate based on total consumption (in a real app, you'd calculate per hour/day)
-  const rate = consume / Math.max(intake, 1);
-  if (rate > 0.8) return 'High';
-  if (rate > 0.5) return 'Medium';
-  return 'Low';
 }
 
 export function InventoryPage() {
@@ -153,151 +160,129 @@ export function InventoryPage() {
 
   return (
     <div className="p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-100 rounded-lg">
-            <Package className="h-6 w-6 text-blue-600" />
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">Inventory Dashboard</h2>
-            <p className="text-gray-500">Real-time inventory levels and activity</p>
-          </div>
+      {/* Page Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h2 className="text-3xl font-bold text-[var(--text-primary)]">
+            Inventory Dashboard
+          </h2>
+          <p className="text-[var(--text-muted)] mt-1">
+            Real-time view of all parts and materials
+          </p>
         </div>
         <button
           onClick={() => refetchInventory()}
-          className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+          className="btn-secondary flex items-center gap-2"
         >
           <RefreshCw className="h-4 w-4" />
           Refresh
         </button>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <SummaryCard
-          title="Total SKUs"
+      {/* Stats Grid */}
+      <div className="grid grid-cols-4 gap-4 mb-8">
+        <StatCard
+          title="Total Parts"
           value={totalItems}
-          icon={Package}
-          color="blue"
+          icon={Boxes}
+          subtitle="Unique SKUs tracked"
         />
-        <SummaryCard
-          title="Critical Items"
+        <StatCard
+          title="Critical Stock"
           value={criticalItems}
           icon={AlertCircle}
-          color="red"
-          subtitle={criticalItems > 0 ? 'Needs attention' : 'All good'}
+          variant={criticalItems > 0 ? 'danger' : 'default'}
+          subtitle="Need immediate attention"
         />
-        <SummaryCard
+        <StatCard
           title="Low Stock"
           value={lowItems}
-          icon={TrendingDown}
-          color="amber"
+          icon={AlertTriangle}
+          variant={lowItems > 0 ? 'warning' : 'default'}
+          subtitle="Below reorder point"
         />
-        <SummaryCard
+        <StatCard
           title="Open Signals"
           value={openSignals}
-          icon={AlertTriangle}
-          color={openSignals > 0 ? 'red' : 'green'}
+          icon={Bell}
+          variant={openSignals > 0 ? 'warning' : 'success'}
+          subtitle="Pending replenishment"
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Inventory Table */}
-        <div className="lg:col-span-2 bg-white rounded-lg shadow-sm border">
-          <div className="px-4 py-3 border-b flex items-center gap-2">
-            <Package className="h-5 w-5 text-gray-600" />
-            <h3 className="font-semibold">Current Inventory</h3>
-            {inventory && (
-              <span className="ml-auto text-sm text-gray-500">
-                {inventory.total_items} items
-              </span>
-            )}
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-3 gap-6">
+        {/* Inventory Table - 2 columns */}
+        <div className="col-span-2 card-dark overflow-hidden">
+          <div className="px-5 py-4 border-b border-[var(--border-primary)] flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Package className="h-5 w-5 text-[var(--accent-primary)]" />
+              <h3 className="font-semibold text-[var(--text-primary)]">Current Inventory</h3>
+            </div>
+            <span className="text-sm text-[var(--text-muted)]">{totalItems} items</span>
           </div>
-          <div className="overflow-auto max-h-[55vh]">
+
+          <div className="max-h-[500px] overflow-auto">
             {inventoryLoading ? (
-              <div className="p-8 text-center text-gray-500">Loading...</div>
+              <div className="flex items-center justify-center py-20">
+                <RefreshCw className="h-8 w-8 text-[var(--accent-primary)] animate-spin" />
+              </div>
             ) : inventory?.items.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">
-                No inventory data. Start scanning items!
+              <div className="text-center py-20">
+                <Boxes className="h-12 w-12 text-[var(--text-muted)] mx-auto mb-3" />
+                <p className="text-[var(--text-secondary)]">No inventory yet</p>
+                <p className="text-sm text-[var(--text-muted)]">Start by scanning items in the Receive tab</p>
               </div>
             ) : (
-              <table className="w-full">
-                <thead className="bg-gray-50 sticky top-0">
+              <table className="table-dark">
+                <thead>
                   <tr>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">
-                      Item ID
-                    </th>
-                    <th className="px-4 py-2 text-center text-sm font-medium text-gray-600">
-                      Status
-                    </th>
-                    <th className="px-4 py-2 text-right text-sm font-medium text-gray-600">
-                      On Hand
-                    </th>
-                    <th className="px-4 py-2 text-center text-sm font-medium text-gray-600">
-                      In / Out
-                    </th>
-                    <th className="px-4 py-2 text-center text-sm font-medium text-gray-600">
-                      Velocity
-                    </th>
-                    <th className="px-4 py-2 text-right text-sm font-medium text-gray-600">
-                      Last Activity
-                    </th>
+                    <th>Part Number</th>
+                    <th>On Hand</th>
+                    <th>Status</th>
+                    <th>In / Out</th>
+                    <th>Last Activity</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
-                  {inventory?.items.map((item) => {
+                <tbody>
+                  {inventory?.items.map((item, index) => {
                     const status = getStockStatus(item.on_hand_qty, item.below_reorder_point);
-                    const velocity = calculateConsumptionRate(item.intake_total, item.consume_total);
-
                     return (
                       <tr
                         key={item.item_id}
-                        className={
-                          status === 'critical'
-                            ? 'bg-red-50'
-                            : status === 'low'
-                            ? 'bg-amber-50/50'
-                            : ''
-                        }
+                        className="animate-slide-in"
+                        style={{ animationDelay: `${index * 50}ms` }}
                       >
-                        <td className="px-4 py-3 font-medium text-gray-900">
-                          {item.item_id}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <StockStatusBadge status={status} />
-                        </td>
-                        <td
-                          className={`px-4 py-3 text-right font-mono text-lg ${
-                            status === 'critical'
-                              ? 'text-red-600 font-bold'
-                              : status === 'low'
-                              ? 'text-amber-600 font-semibold'
-                              : 'text-gray-900'
-                          }`}
-                        >
-                          {item.on_hand_qty}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className="text-green-600 font-mono">+{item.intake_total}</span>
-                          <span className="text-gray-400 mx-1">/</span>
-                          <span className="text-red-600 font-mono">-{item.consume_total}</span>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span
-                            className={`inline-flex items-center gap-1 text-xs ${
-                              velocity === 'High'
-                                ? 'text-red-600'
-                                : velocity === 'Medium'
-                                ? 'text-amber-600'
-                                : 'text-gray-500'
-                            }`}
-                          >
-                            <Activity className="h-3 w-3" />
-                            {velocity}
+                        <td>
+                          <span className="font-mono font-semibold text-[var(--text-primary)]">
+                            {item.item_id}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right text-sm text-gray-500">
+                        <td>
+                          <span className={`font-mono text-lg font-bold ${
+                            status === 'critical' ? 'text-[var(--accent-danger)]' :
+                            status === 'low' ? 'text-[var(--accent-warning)]' :
+                            'text-[var(--accent-success)]'
+                          }`}>
+                            {item.on_hand_qty}
+                          </span>
+                        </td>
+                        <td>
+                          <StockStatusBadge status={status} />
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-3 text-sm">
+                            <span className="flex items-center gap-1 text-[var(--accent-success)]">
+                              <ArrowDown className="h-3 w-3" />
+                              {item.intake_total}
+                            </span>
+                            <span className="flex items-center gap-1 text-[var(--accent-danger)]">
+                              <ArrowUp className="h-3 w-3" />
+                              {item.consume_total}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="text-[var(--text-muted)] text-sm">
                           {formatRelativeTime(item.last_activity_ts)}
                         </td>
                       </tr>
@@ -309,50 +294,56 @@ export function InventoryPage() {
           </div>
         </div>
 
-        {/* Sidebar: Signals & Activity */}
+        {/* Sidebar */}
         <div className="space-y-6">
           {/* Replenishment Signals */}
-          <div className="bg-white rounded-lg shadow-sm border">
-            <div className="px-4 py-3 border-b flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
-              <h3 className="font-semibold">Replenishment Signals</h3>
+          <div className="card-dark overflow-hidden">
+            <div className="px-5 py-4 border-b border-[var(--border-primary)] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Bell className="h-5 w-5 text-[var(--accent-warning)]" />
+                <h3 className="font-semibold text-[var(--text-primary)]">Replenishment Signals</h3>
+              </div>
               {signals && signals.total_open > 0 && (
-                <span className="ml-auto px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full font-medium">
+                <span className="badge badge-warning">
                   {signals.total_open} open
                 </span>
               )}
             </div>
             <div className="p-4 space-y-3 max-h-[280px] overflow-auto">
               {signals?.signals.length === 0 ? (
-                <div className="text-center py-6">
-                  <CheckCircle2 className="h-8 w-8 text-green-500 mx-auto mb-2" />
-                  <p className="text-gray-500 text-sm">No open signals</p>
-                  <p className="text-gray-400 text-xs">All items stocked</p>
+                <div className="text-center py-8">
+                  <div className="relative inline-block">
+                    <CheckCircle2 className="h-10 w-10 text-[var(--accent-success)]" />
+                    <Sparkles className="h-4 w-4 text-[var(--accent-success)] absolute -top-1 -right-1" />
+                  </div>
+                  <p className="text-[var(--text-secondary)] mt-3">All stocked</p>
+                  <p className="text-xs text-[var(--text-muted)]">No signals pending</p>
                 </div>
               ) : (
-                signals?.signals.map((signal) => (
+                signals?.signals.map((signal, index) => (
                   <div
                     key={signal.signal_id}
-                    className="p-3 bg-amber-50 border border-amber-200 rounded-lg"
+                    className="p-4 bg-[var(--accent-warning-dim)] border border-[var(--accent-warning)] rounded-xl animate-slide-in"
+                    style={{ animationDelay: `${index * 100}ms` }}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-amber-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono font-bold text-[var(--accent-warning)]">
                         {signal.item_id}
                       </span>
-                      <span className="text-xs text-amber-600">
+                      <span className="text-xs text-[var(--text-muted)]">
                         {formatRelativeTime(signal.created_ts)}
                       </span>
                     </div>
-                    <div className="mt-2 flex items-center gap-4 text-sm">
+                    <div className="flex items-center gap-6 text-sm">
                       <div>
-                        <span className="text-amber-600">Current:</span>
-                        <span className="ml-1 font-mono font-bold text-red-600">
+                        <span className="text-[var(--text-muted)]">Current</span>
+                        <span className="ml-2 font-mono font-bold text-[var(--accent-danger)]">
                           {inventoryMap.get(signal.item_id) ?? signal.current_qty}
                         </span>
                       </div>
                       <div>
-                        <span className="text-amber-600">Reorder:</span>
-                        <span className="ml-1 font-mono text-amber-800">
+                        <span className="text-[var(--text-muted)]">Reorder</span>
+                        <span className="ml-2 font-mono font-bold text-[var(--text-primary)]">
                           {signal.reorder_qty}
                         </span>
                       </div>
@@ -364,55 +355,55 @@ export function InventoryPage() {
           </div>
 
           {/* Recent Activity */}
-          <div className="bg-white rounded-lg shadow-sm border">
-            <div className="px-4 py-3 border-b flex items-center gap-2">
-              <Clock className="h-5 w-5 text-gray-600" />
-              <h3 className="font-semibold">Recent Activity</h3>
-              <span className="ml-auto text-xs text-gray-400">
-                {todayScans} scans
-              </span>
+          <div className="card-dark overflow-hidden">
+            <div className="px-5 py-4 border-b border-[var(--border-primary)] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Activity className="h-5 w-5 text-[var(--accent-primary)]" />
+                <h3 className="font-semibold text-[var(--text-primary)]">Recent Activity</h3>
+              </div>
+              <span className="text-xs text-[var(--text-muted)]">{todayScans} events</span>
             </div>
             <div className="p-4 space-y-2 max-h-[280px] overflow-auto">
               {recentEvents?.events.length === 0 ? (
-                <div className="text-center py-6">
-                  <Activity className="h-8 w-8 text-gray-300 mx-auto mb-2" />
-                  <p className="text-gray-500 text-sm">No recent activity</p>
-                  <p className="text-gray-400 text-xs">Start scanning items</p>
+                <div className="text-center py-8">
+                  <Clock className="h-10 w-10 text-[var(--text-muted)] mx-auto" />
+                  <p className="text-[var(--text-secondary)] mt-3">No recent activity</p>
+                  <p className="text-xs text-[var(--text-muted)]">Start scanning items</p>
                 </div>
               ) : (
-                recentEvents?.events.map((event) => (
+                recentEvents?.events.map((event, index) => (
                   <div
                     key={event.event_id}
-                    className="flex items-center gap-3 text-sm py-1.5 border-b border-gray-100 last:border-0"
+                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-[var(--bg-hover)] transition-colors animate-slide-in"
+                    style={{ animationDelay: `${index * 50}ms` }}
                   >
                     <div
-                      className={`p-1 rounded ${
+                      className={`p-2 rounded-lg ${
                         event.event_type === 'INTAKE'
-                          ? 'bg-green-100'
-                          : 'bg-red-100'
+                          ? 'bg-[var(--accent-success-dim)]'
+                          : 'bg-[var(--accent-danger-dim)]'
                       }`}
                     >
                       {event.event_type === 'INTAKE' ? (
-                        <ArrowDown className="h-3 w-3 text-green-600" />
+                        <ArrowDown className="h-3 w-3 text-[var(--accent-success)]" />
                       ) : (
-                        <ArrowUp className="h-3 w-3 text-red-600" />
+                        <ArrowUp className="h-3 w-3 text-[var(--accent-danger)]" />
                       )}
                     </div>
-                    <span className="font-medium truncate flex-1">
-                      {event.item_id}
-                    </span>
-                    <span
-                      className={`font-mono font-semibold ${
-                        event.event_type === 'INTAKE'
-                          ? 'text-green-600'
-                          : 'text-red-600'
-                      }`}
-                    >
-                      {event.event_type === 'INTAKE' ? '+' : '-'}
-                      {event.qty}
-                    </span>
-                    <span className="text-gray-400 text-xs whitespace-nowrap">
-                      {formatRelativeTime(event.event_ts)}
+                    <div className="flex-1 min-w-0">
+                      <span className="font-mono text-sm font-medium text-[var(--text-primary)] truncate block">
+                        {event.item_id}
+                      </span>
+                      <span className="text-xs text-[var(--text-muted)]">
+                        {formatRelativeTime(event.event_ts)}
+                      </span>
+                    </div>
+                    <span className={`font-mono font-bold ${
+                      event.event_type === 'INTAKE'
+                        ? 'text-[var(--accent-success)]'
+                        : 'text-[var(--accent-danger)]'
+                    }`}>
+                      {event.event_type === 'INTAKE' ? '+' : '-'}{event.qty}
                     </span>
                   </div>
                 ))
