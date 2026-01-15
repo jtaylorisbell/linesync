@@ -73,11 +73,14 @@ def silver_scan_events():
 )
 @dlt.expect_or_drop("valid_status", "status IN ('OPEN', 'ACKNOWLEDGED', 'FULFILLED')")
 def silver_replenishment_signals():
-    """Clean and enrich replenishment signals."""
+    """Clean and enrich replenishment signals.
+
+    Note: triggered_at_qty is the historical snapshot of inventory when the signal was created.
+    """
     return (
         dlt.read("bronze_replenishment_signals")
         .withColumn("signal_date", F.to_date("created_ts"))
-        .withColumn("qty_below_reorder", F.col("reorder_point") - F.col("current_qty"))
+        .withColumn("qty_below_reorder", F.col("reorder_point") - F.col("triggered_at_qty"))
     )
 
 
@@ -135,28 +138,41 @@ def gold_daily_activity():
 
 @dlt.table(
     name="gold_open_replenishment_signals",
-    comment="Open replenishment signals requiring action",
+    comment="Open replenishment signals requiring action (latest state per signal_id)",
     table_properties={"quality": "gold"},
 )
 def gold_open_replenishment_signals():
-    """Get open replenishment signals with current inventory context."""
-    signals = dlt.read("silver_replenishment_signals").filter(
-        F.col("status") == "OPEN"
+    """Get open replenishment signals with current inventory context.
+
+    Note: With append-only pattern, we get the latest state per signal_id using window functions.
+    triggered_at_qty is the historical snapshot when the signal was created.
+    """
+    from pyspark.sql.window import Window
+
+    # Get latest state per signal_id (append-only pattern)
+    window_spec = Window.partitionBy("signal_id").orderBy(F.col("created_ts").desc())
+    latest_signals = (
+        dlt.read("silver_replenishment_signals")
+        .withColumn("rn", F.row_number().over(window_spec))
+        .filter(F.col("rn") == 1)
+        .drop("rn")
+        .filter(F.col("status") == "OPEN")
     )
+
     inventory = dlt.read("gold_inventory_summary")
 
     return (
-        signals.join(inventory, "item_id", "left")
+        latest_signals.join(inventory, "item_id", "left")
         .select(
-            signals["signal_id"],
-            signals["item_id"],
-            signals["current_qty"].alias("qty_at_signal"),
+            latest_signals["signal_id"],
+            latest_signals["item_id"],
+            latest_signals["triggered_at_qty"].alias("qty_at_signal"),
             inventory["on_hand_qty"].alias("current_on_hand"),
-            signals["reorder_point"],
-            signals["reorder_qty"],
-            signals["created_ts"],
-            signals["signal_date"],
-            (inventory["on_hand_qty"] > signals["reorder_point"]).alias(
+            latest_signals["reorder_point"],
+            latest_signals["reorder_qty"],
+            latest_signals["created_ts"],
+            latest_signals["signal_date"],
+            (inventory["on_hand_qty"] > latest_signals["reorder_point"]).alias(
                 "already_restocked"
             ),
         )
@@ -169,9 +185,23 @@ def gold_open_replenishment_signals():
     table_properties={"quality": "gold"},
 )
 def gold_replenishment_metrics():
-    """Calculate replenishment metrics."""
-    return (
+    """Calculate replenishment metrics based on current state of each signal.
+
+    Note: With append-only pattern, we get the latest state per signal_id first.
+    """
+    from pyspark.sql.window import Window
+
+    # Get latest state per signal_id (append-only pattern)
+    window_spec = Window.partitionBy("signal_id").orderBy(F.col("created_ts").desc())
+    latest_signals = (
         dlt.read("silver_replenishment_signals")
+        .withColumn("rn", F.row_number().over(window_spec))
+        .filter(F.col("rn") == 1)
+        .drop("rn")
+    )
+
+    return (
+        latest_signals
         .groupBy("status")
         .agg(
             F.count("*").alias("signal_count"),
