@@ -62,3 +62,36 @@ export interface CurrentUser {
   display_name: string;
   is_authenticated: boolean;
 }
+
+// Packing slip parsing types
+
+export interface ParsedLineItem {
+  item_id: string;
+  qty: number;
+  description: string | null;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+export interface PackingSlipParseResponse {
+  items: ParsedLineItem[];
+  vendor: string | null;
+  po_number: string | null;
+  ship_date: string | null;
+  notes: string | null;
+}
+
+export interface BulkIntakeItem {
+  item_id: string;
+  qty: number;
+}
+
+export interface BulkIntakeRequest {
+  station_id?: string;
+  items: BulkIntakeItem[];
+}
+
+export interface BulkIntakeResponse {
+  events: ScanEventResponse[];
+  total_items: number;
+  total_qty: number;
+}

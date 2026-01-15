@@ -1,8 +1,11 @@
 import type {
+  BulkIntakeRequest,
+  BulkIntakeResponse,
   CurrentUser,
   HealthResponse,
   InventoryItem,
   InventoryListResponse,
+  PackingSlipParseResponse,
   RecentActivityResponse,
   ReplenishmentSignal,
   ScanEventResponse,
@@ -83,6 +86,31 @@ export const api = {
   acknowledgeSignal: (signalId: string) =>
     request<ReplenishmentSignal>(`/signals/${signalId}/acknowledge`, {
       method: 'POST',
+    }),
+
+  // Packing slip parsing
+  parsePackingSlip: async (file: File): Promise<PackingSlipParseResponse> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE}/parse-packing-slip`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+      throw new ApiError(error.detail || 'Request failed', response.status);
+    }
+
+    return response.json();
+  },
+
+  // Bulk intake
+  createBulkIntake: (data: BulkIntakeRequest) =>
+    request<BulkIntakeResponse>('/events/bulk-intake', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
 };
 

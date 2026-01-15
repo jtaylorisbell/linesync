@@ -22,37 +22,42 @@ class LakebaseConnectionFactory:
         """Initialize connection factory.
 
         In Databricks Apps:
-        - PGHOST and PGDATABASE are automatically set
+        - PGHOST and PGDATABASE are automatically set by the Lakebase resource
         - Service principal credentials are injected
+
+        Locally:
+        - Use settings from .env file
+        - Use generate_database_credential() for OAuth tokens
         """
-        try:
+        # Check if we're in Databricks Apps by looking for PGHOST
+        # (automatically set by Lakebase resource)
+        pghost = os.getenv("PGHOST")
+
+        if pghost:
+            # Running in Databricks Apps
             from databricks.sdk import WorkspaceClient
             from databricks.sdk.core import Config
 
             self._config = Config()
             self._workspace_client = WorkspaceClient()
 
-            # In Databricks Apps, use service principal client_id as username
             self._postgres_username = self._config.client_id
-            self._postgres_host = os.getenv("PGHOST")
+            self._postgres_host = pghost
             self._postgres_database = os.getenv("PGDATABASE", "databricks_postgres")
-            self._use_databricks_auth = True
+            self._use_databricks_apps = True
 
             logger.info(
                 "lakebase_factory_initialized",
                 host=self._postgres_host,
                 database=self._postgres_database,
                 username=self._postgres_username,
-                auth="databricks_oauth",
+                auth="databricks_apps_oauth",
             )
-
-        except Exception as e:
-            logger.warning("databricks_sdk_not_available", error=str(e))
-            self._use_databricks_auth = False
-
-            # Fall back to local development settings
+        else:
+            # Local development - use settings from .env
             from inventory_demo.config import get_settings
 
+            self._use_databricks_apps = False
             settings = get_settings()
             self._postgres_host = settings.lakebase.host
             self._postgres_database = settings.lakebase.database
@@ -63,12 +68,13 @@ class LakebaseConnectionFactory:
                 "lakebase_factory_initialized",
                 host=self._postgres_host,
                 database=self._postgres_database,
-                auth="local",
+                auth="local_oauth",
             )
 
     def get_connection(self) -> psycopg.Connection:
         """Get a new database connection with fresh OAuth token."""
-        if self._use_databricks_auth:
+        if self._use_databricks_apps:
+            # Databricks Apps: use service principal OAuth token
             token = self._workspace_client.config.oauth_token().access_token
 
             return psycopg.connect(
@@ -80,7 +86,7 @@ class LakebaseConnectionFactory:
                 sslmode="require",
             )
         else:
-            # Local development with OAuth token from Databricks SDK
+            # Local development: use generate_database_credential()
             from inventory_demo.config import _token_manager
 
             token = _token_manager.get_token(
@@ -99,7 +105,7 @@ class LakebaseConnectionFactory:
 
     def get_connection_string(self) -> str:
         """Get SQLAlchemy connection string (for local dev only)."""
-        if self._use_databricks_auth:
+        if self._use_databricks_apps:
             raise RuntimeError(
                 "Cannot use connection string with Databricks OAuth. "
                 "Use get_connection() instead."

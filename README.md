@@ -5,6 +5,7 @@ Barcode-based inventory intake and consumption demo for manufacturing intralogis
 ## Features
 
 - **Intake Scanning**: Camera-based barcode scanning for receiving inventory
+- **Packing Slip Parsing**: Camera-based packing slip capture with AI (Databricks GPT-5) to extract line items
 - **Consumption Scanning**: Line-side scanning for consuming inventory
 - **Real-time Inventory**: Dashboard showing current inventory levels
 - **Automatic Replenishment**: Signals generated when inventory drops below threshold
@@ -137,11 +138,13 @@ ITEM=PART-88219;QTY=24
 - `GET /api/me` - Current user info
 - `POST /api/events/intake` - Create intake event
 - `POST /api/events/consume` - Create consume event
+- `POST /api/events/bulk-intake` - Create multiple intake events at once
 - `GET /api/events/recent` - Recent activity
 - `GET /api/inventory` - List inventory
 - `GET /api/inventory/{item_id}` - Get item details
 - `GET /api/signals` - List replenishment signals
 - `POST /api/signals/{id}/acknowledge` - Acknowledge a signal
+- `POST /api/parse-packing-slip` - Parse packing slip image with Databricks GPT-5 vision
 
 ## Configuration
 

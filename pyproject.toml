@@ -20,6 +20,8 @@ dependencies = [
     "structlog>=25.5.0",
     "typer>=0.15.0",
     "rich>=13.9.0",
+    "python-multipart>=0.0.21",
+    "openai>=2.15.0",
 ]
 
 [project.scripts]

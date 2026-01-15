@@ -96,3 +96,47 @@ class CurrentUserResponse(BaseModel):
     name: str | None
     display_name: str
     is_authenticated: bool
+
+
+# Packing slip parsing models
+
+
+class ParsedLineItemResponse(BaseModel):
+    """A single line item extracted from a packing slip."""
+
+    item_id: str
+    qty: int
+    description: str | None = None
+    confidence: str = "medium"
+
+
+class PackingSlipParseResponse(BaseModel):
+    """Response for packing slip parsing."""
+
+    items: list[ParsedLineItemResponse]
+    vendor: str | None = None
+    po_number: str | None = None
+    ship_date: str | None = None
+    notes: str | None = None
+
+
+class BulkIntakeItem(BaseModel):
+    """A single item for bulk intake."""
+
+    item_id: str = Field(..., description="Part number or item identifier")
+    qty: int = Field(..., ge=1, description="Quantity to intake")
+
+
+class BulkIntakeRequest(BaseModel):
+    """Request body for bulk intake from packing slip."""
+
+    station_id: str = Field(default="PACKING_SLIP", description="Station identifier")
+    items: list[BulkIntakeItem] = Field(..., description="Items to intake")
+
+
+class BulkIntakeResponse(BaseModel):
+    """Response for bulk intake."""
+
+    events: list[ScanEventResponse]
+    total_items: int
+    total_qty: int

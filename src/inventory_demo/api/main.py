@@ -4,17 +4,21 @@ from pathlib import Path
 from uuid import UUID
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from inventory_demo import __version__
 from inventory_demo.api.barcode_parser import BarcodeParseError
 from inventory_demo.api.schemas import (
+    BulkIntakeRequest,
+    BulkIntakeResponse,
     CurrentUserResponse,
     HealthResponse,
     InventoryItemResponse,
     InventoryListResponse,
+    PackingSlipParseResponse,
+    ParsedLineItemResponse,
     RecentActivityResponse,
     ReplenishmentSignalResponse,
     ScanEventResponse,
@@ -258,6 +262,116 @@ async def get_recent_events(limit: int = 20) -> RecentActivityResponse:
     return RecentActivityResponse(
         events=event_responses,
         limit=limit,
+    )
+
+
+@app.post("/api/parse-packing-slip", response_model=PackingSlipParseResponse)
+async def parse_packing_slip(
+    file: UploadFile = File(..., description="Packing slip image"),
+) -> PackingSlipParseResponse:
+    """Parse a packing slip image using Claude vision.
+
+    Upload an image of a packing slip to extract line items.
+    Supported formats: JPEG, PNG, WebP, GIF.
+    """
+    # Validate file type
+    content_type = file.content_type or "image/jpeg"
+    if not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File must be an image, got: {content_type}",
+        )
+
+    # Map content types to supported media types
+    media_type_map = {
+        "image/jpeg": "image/jpeg",
+        "image/jpg": "image/jpeg",
+        "image/png": "image/png",
+        "image/webp": "image/webp",
+        "image/gif": "image/gif",
+    }
+    media_type = media_type_map.get(content_type, "image/jpeg")
+
+    # Read file content
+    image_data = await file.read()
+    if len(image_data) > 20 * 1024 * 1024:  # 20MB limit
+        raise HTTPException(
+            status_code=400,
+            detail="Image too large. Maximum size is 20MB.",
+        )
+
+    # Parse using Databricks GPT-5 vision
+    try:
+        from inventory_demo.api.packing_slip_parser import get_parser
+
+        parser = get_parser()
+        result = parser.parse_image(image_data, media_type)
+
+        return PackingSlipParseResponse(
+            items=[
+                ParsedLineItemResponse(
+                    item_id=item.item_id,
+                    qty=item.qty,
+                    description=item.description,
+                    confidence=item.confidence,
+                )
+                for item in result.items
+            ],
+            vendor=result.vendor,
+            po_number=result.po_number,
+            ship_date=result.ship_date,
+            notes=result.notes,
+        )
+    except Exception as e:
+        logger.error("packing_slip_parse_error", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to parse packing slip: {e}")
+
+
+@app.post("/api/events/bulk-intake", response_model=BulkIntakeResponse)
+async def create_bulk_intake(
+    request: BulkIntakeRequest, http_request: Request
+) -> BulkIntakeResponse:
+    """Create multiple INTAKE events at once.
+
+    Used for processing packing slips where multiple items are received together.
+    Each item creates a separate scan event with a synthetic barcode.
+    """
+    user = get_current_user(http_request)
+    service = get_service()
+
+    events = []
+    for item in request.items:
+        # Create synthetic barcode for tracking
+        barcode_raw = f"ITEM={item.item_id};QTY={item.qty}"
+
+        try:
+            event, on_hand_qty = service.create_intake_event(
+                station_id=request.station_id,
+                barcode_raw=barcode_raw,
+                user_email=user.email,
+            )
+            events.append(
+                ScanEventResponse(
+                    event_id=event.event_id,
+                    event_ts=event.event_ts,
+                    event_type=EventType(event.event_type),
+                    station_id=event.station_id,
+                    item_id=event.item_id,
+                    qty=event.qty,
+                    on_hand_qty=on_hand_qty,
+                )
+            )
+        except DuplicateScanError:
+            # Skip duplicates in bulk operations
+            logger.warning("duplicate_scan_in_bulk", item_id=item.item_id)
+            continue
+
+    total_qty = sum(e.qty for e in events)
+
+    return BulkIntakeResponse(
+        events=events,
+        total_items=len(events),
+        total_qty=total_qty,
     )
 
 
