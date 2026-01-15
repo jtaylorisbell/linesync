@@ -18,6 +18,7 @@ sync:
   include:
     - src/**
     - frontend/dist/**
+    - marketing/**
     - sql/**
     - pipelines/**
     - app.py

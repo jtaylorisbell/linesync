@@ -6,6 +6,7 @@ from uuid import UUID
 import structlog
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from inventory_demo import __version__
@@ -392,7 +393,16 @@ async def create_bulk_intake(
     )
 
 
-# Serve static files for frontend (when built)
+# Serve marketing landing page at root
+marketing_dir = Path(__file__).parent.parent.parent.parent / "marketing"
+if marketing_dir.exists():
+
+    @app.get("/", response_class=FileResponse)
+    async def landing_page():
+        """Serve the marketing landing page."""
+        return FileResponse(marketing_dir / "index.html")
+
+# Serve static files for frontend app (when built)
 frontend_dist = Path(__file__).parent.parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+    app.mount("/app", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
