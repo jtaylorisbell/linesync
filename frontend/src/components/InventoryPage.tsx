@@ -146,6 +146,11 @@ export function InventoryPage() {
   const openSignals = signals?.total_open || 0;
   const todayScans = recentEvents?.events.length || 0;
 
+  // Create inventory lookup map for live current_qty in signals
+  const inventoryMap = new Map(
+    inventory?.items.map((item) => [item.item_id, item.on_hand_qty]) || []
+  );
+
   return (
     <div className="p-6">
       {/* Header */}
@@ -342,7 +347,7 @@ export function InventoryPage() {
                       <div>
                         <span className="text-amber-600">Current:</span>
                         <span className="ml-1 font-mono font-bold text-red-600">
-                          {signal.current_qty}
+                          {inventoryMap.get(signal.item_id) ?? signal.current_qty}
                         </span>
                       </div>
                       <div>
