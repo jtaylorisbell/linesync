@@ -4,9 +4,17 @@ resources:
       display_name: "Open Replenishment Signals - ${bundle.target}"
 
       query_text: |
+        -- Append-only pattern: get latest status per signal using window function
+        WITH latest_signals AS (
+          SELECT
+            signal_id,
+            status,
+            ROW_NUMBER() OVER (PARTITION BY signal_id ORDER BY created_ts DESC) as rn
+          FROM ${var.lakebase_catalog}.${var.lakebase_schema}.replenishment_signals
+        )
         SELECT COUNT(*) as open_count
-        FROM ${var.lakebase_catalog}.${var.lakebase_schema}.replenishment_signals
-        WHERE status = 'OPEN'
+        FROM latest_signals
+        WHERE rn = 1 AND status = 'OPEN'
 
       warehouse_id: 8d3e55aa7cea6427
 

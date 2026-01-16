@@ -55,3 +55,7 @@ SELECT
     MAX(event_ts) AS last_activity_ts
 FROM scan_events
 GROUP BY item_id;
+
+-- Grant permissions on sequences for Databricks Apps service principals
+-- Required for INSERT operations that use auto-increment columns
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO PUBLIC;
