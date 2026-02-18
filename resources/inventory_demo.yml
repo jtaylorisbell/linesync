@@ -8,11 +8,3 @@ resources:
       # API scopes for database credential generation
       user_api_scopes:
         - sql
-
-      # Lakebase database resource
-      resources:
-        - name: lakebase
-          database:
-            instance_name: ${var.lakebase_instance}
-            database_name: ${var.lakebase_database}
-            permission: CAN_CONNECT_AND_CREATE

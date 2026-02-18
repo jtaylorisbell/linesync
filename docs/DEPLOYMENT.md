@@ -6,7 +6,7 @@ This guide covers deploying LineSync to Databricks Apps and setting up the compl
 
 - Databricks CLI installed and configured
 - Access to a Databricks workspace with:
-  - Lakebase (managed PostgreSQL) enabled
+  - Lakebase Autoscaling enabled
   - Databricks Apps enabled
   - Unity Catalog configured
   - Foundation Model APIs enabled (for packing slip parsing)
@@ -27,48 +27,48 @@ This guide covers deploying LineSync to Databricks Apps and setting up the compl
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Step 1: Create Lakebase Instance
+## Step 1: Provision Lakebase Autoscaling
 
-1. Navigate to **SQL** > **Lakebase** in your Databricks workspace
-2. Click **Create Instance**
-3. Configure:
-   - **Name**: `linesync-db` (or your preferred name)
-   - **Instance Type**: Select based on expected load (Starter is fine for demo)
-4. Note the following values from the connection details:
-   - **Host**: `instance-xxx.database.cloud.databricks.com`
-   - **Instance Name**: The name you chose (e.g., `linesync-db`)
-
-## Step 2: Configure Environment
-
-Create a `.env` file from the example:
+The CLI automates creating the Lakebase project, branch, endpoint, and user role:
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your Lakebase details:
+Edit `.env` with your Databricks workspace host and user email:
 
 ```bash
-# Databricks workspace
 DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
-
-# Lakebase connection
-LAKEBASE_HOST=instance-xxx.database.cloud.databricks.com
-LAKEBASE_INSTANCE_NAME=linesync-db
-LAKEBASE_DATABASE=databricks_postgres
-LAKEBASE_USER=your.email@company.com
-LAKEBASE_USE_OAUTH=true
-
-# Local development
 USER_EMAIL=your.email@company.com
 ```
 
-## Step 3: Initialize Database Schema
+Then provision the infrastructure:
 
 ```bash
-# Install dependencies
 uv sync
+uv run inventory-demo provision --write-env
+```
 
+This will:
+1. Create a Lakebase project (`linesync`)
+2. Create a branch (`main`) with no expiration
+3. Create a read-write endpoint (`default`) with 0.5-2.0 CU autoscaling
+4. Create an OAuth role for your user email
+5. Write the discovered host and resource IDs back to `.env`
+
+You can customize the resource names:
+
+```bash
+uv run inventory-demo provision \
+  --project-id my-project \
+  --branch-id dev \
+  --endpoint-id primary \
+  --write-env
+```
+
+## Step 2: Initialize Database Schema
+
+```bash
 # Initialize tables
 uv run inventory-demo init-db
 
@@ -78,43 +78,36 @@ uv run inventory-demo status
 
 Expected output:
 ```
-╭───────────────────────────────────────╮
-│         Lakebase Connection           │
-├───────────────────────────────────────┤
-│ Database: databricks_postgres         │
-│ Host: instance-xxx.database...        │
-│ User: your.email@company.com          │
-│ OAuth: Enabled                        │
-╰───────────────────────────────────────╯
+╭───────────────────────────────────────────────────╮
+│              Lakebase Connection                    │
+├───────────────────────────────────────────────────┤
+│ Database: postgres                                 │
+│ Host: ep-xxx.database.cloud.databricks.com         │
+│ User: your.email@company.com                       │
+│ Endpoint: projects/linesync/branches/main/...      │
+╰───────────────────────────────────────────────────╯
 
-✓ Database connected
+Database connected
 
 Table Statistics:
   scan_events: 0 rows
   replenishment_signals: 0 rows (0 unique signals, 0 currently open)
 ```
 
-## Step 4: Build Frontend
-
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
-This creates `frontend/dist/` with the production build.
-
-## Step 5: Configure Databricks Bundle
+## Step 3: Configure Databricks Bundle
 
 Edit `databricks.yml` with your workspace profile and variable values:
 
 ```yaml
 variables:
-  lakebase_instance:
-    default: linesync-db
+  lakebase_project_id:
+    default: linesync
+  lakebase_branch_id:
+    default: main
+  lakebase_endpoint_id:
+    default: default
   lakebase_database:
-    default: databricks_postgres
+    default: postgres
   lakebase_catalog:
     default: your_lakebase_catalog  # Unity Catalog for Lakebase
   target_catalog:
@@ -126,7 +119,9 @@ targets:
       profile: your-workspace-profile  # From ~/.databrickscfg
 ```
 
-## Step 6: Deploy to Databricks Apps
+## Step 4: Deploy to Databricks Apps
+
+> **Note:** The frontend is built automatically by Databricks Apps during deployment -- no manual build step is needed.
 
 ```bash
 # Validate the bundle
@@ -141,7 +136,7 @@ The first deployment will:
 2. Create the Databricks App
 3. Create the DLT pipeline
 
-## Step 7: Grant Permissions to App Service Principal
+## Step 5: Grant Permissions to App Service Principal
 
 After the first deployment, the app runs as its own service principal which needs table access.
 
@@ -151,6 +146,8 @@ After the first deployment, the app runs as its own service principal which need
 # Get app name from deployment output, then:
 uv run inventory-demo grant-app-access inventory-demo-dev
 ```
+
+This creates a Lakebase role for the service principal and grants SQL-level table permissions.
 
 ### Option B: Manual SQL
 
@@ -165,7 +162,7 @@ GRANT ALL ON scan_events TO "<service_principal_id>";
 GRANT ALL ON replenishment_signals TO "<service_principal_id>";
 ```
 
-## Step 8: Access the App
+## Step 6: Access the App
 
 Get the app URL:
 
@@ -175,7 +172,7 @@ databricks apps get inventory-demo-dev | grep url
 
 Or find it in the Databricks UI under **Compute** > **Apps**.
 
-## Step 9: Configure DLT Pipeline (Optional)
+## Step 7: Configure DLT Pipeline (Optional)
 
 The DLT pipeline syncs Lakebase data to Delta tables for analytics.
 
@@ -198,12 +195,10 @@ Or use the UI: **Workflows** > **Delta Live Tables** > **inventory-lakebase-to-d
 
 ## Deployment Checklist
 
-- [ ] Lakebase instance created and accessible
-- [ ] `.env` configured with correct values
+- [ ] Lakebase provisioned (`provision --write-env`)
 - [ ] Database schema initialized (`init-db`)
-- [ ] Frontend built (`npm run build`)
 - [ ] Bundle deployed (`bundle deploy`)
-- [ ] Service principal permissions granted
+- [ ] Service principal permissions granted (`grant-app-access`)
 - [ ] App accessible via URL
 - [ ] (Optional) DLT pipeline configured and running
 
@@ -212,10 +207,6 @@ Or use the UI: **Workflows** > **Delta Live Tables** > **inventory-lakebase-to-d
 After making changes:
 
 ```bash
-# Rebuild frontend if UI changed
-cd frontend && npm run build && cd ..
-
-# Deploy updates
 databricks bundle deploy -t dev
 ```
 
@@ -225,9 +216,9 @@ The app will automatically restart with the new code.
 
 ### "Database connection failed"
 
-1. Verify Lakebase host and instance name in `.env`
-2. Check OAuth is enabled: `LAKEBASE_USE_OAUTH=true`
-3. Ensure your user has access to the Lakebase instance
+1. Verify Lakebase is provisioned: `uv run inventory-demo status`
+2. Check `.env` has the correct host and resource IDs
+3. Ensure your user has an OAuth role on the branch
 
 ### "Permission denied on tables"
 
@@ -254,12 +245,14 @@ The app will automatically restart with the new code.
 
 ## Environment Variables Reference
 
-### Required for Databricks Apps
+### Set in app.yaml (Databricks Apps)
 
-| Variable | Description |
-|----------|-------------|
-| `PGHOST` | Auto-set by Lakebase resource binding |
-| `PGDATABASE` | Auto-set by Lakebase resource binding |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LAKEBASE_PROJECT_ID` | `linesync` | Lakebase project identifier |
+| `LAKEBASE_BRANCH_ID` | `main` | Branch within the project |
+| `LAKEBASE_ENDPOINT_ID` | `default` | Compute endpoint within the branch |
+| `LAKEBASE_DATABASE` | `postgres` | Database name |
 
 ### Optional Configuration
 

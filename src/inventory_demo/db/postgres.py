@@ -22,18 +22,17 @@ class LakebaseConnectionFactory:
         """Initialize connection factory.
 
         In Databricks Apps:
-        - PGHOST and PGDATABASE are automatically set by the Lakebase resource
-        - Service principal credentials are injected
+        - LAKEBASE_PROJECT_ID, LAKEBASE_BRANCH_ID, LAKEBASE_ENDPOINT_ID are set
+          as environment variables in app.yaml
+        - Uses w.postgres SDK for endpoint discovery and credential generation
 
         Locally:
         - Use settings from .env file
         - Use generate_database_credential() for OAuth tokens
         """
-        # Check if we're in Databricks Apps by looking for PGHOST
-        # (automatically set by Lakebase resource)
-        pghost = os.getenv("PGHOST")
+        project_id = os.getenv("LAKEBASE_PROJECT_ID")
 
-        if pghost:
+        if project_id:
             # Running in Databricks Apps
             from databricks.sdk import WorkspaceClient
             from databricks.sdk.core import Config
@@ -41,9 +40,17 @@ class LakebaseConnectionFactory:
             self._config = Config()
             self._workspace_client = WorkspaceClient()
 
+            branch_id = os.getenv("LAKEBASE_BRANCH_ID", "main")
+            endpoint_id = os.getenv("LAKEBASE_ENDPOINT_ID", "default")
+            self._endpoint_name = (
+                f"projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}"
+            )
+
+            # Discover host from the endpoint
+            endpoint = self._workspace_client.postgres.get_endpoint(name=self._endpoint_name)
+            self._postgres_host = endpoint.status.host
+            self._postgres_database = os.getenv("LAKEBASE_DATABASE", "postgres")
             self._postgres_username = self._config.client_id
-            self._postgres_host = pghost
-            self._postgres_database = os.getenv("PGDATABASE", "databricks_postgres")
             self._use_databricks_apps = True
 
             logger.info(
@@ -51,6 +58,7 @@ class LakebaseConnectionFactory:
                 host=self._postgres_host,
                 database=self._postgres_database,
                 username=self._postgres_username,
+                endpoint=self._endpoint_name,
                 auth="databricks_apps_oauth",
             )
         else:
@@ -62,27 +70,31 @@ class LakebaseConnectionFactory:
             self._postgres_host = settings.lakebase.host
             self._postgres_database = settings.lakebase.database
             self._postgres_username = settings.lakebase.user
+            self._endpoint_name = settings.lakebase.endpoint_name
             self._local_settings = settings
 
             logger.info(
                 "lakebase_factory_initialized",
                 host=self._postgres_host,
                 database=self._postgres_database,
+                endpoint=self._endpoint_name,
                 auth="local_oauth",
             )
 
     def get_connection(self) -> psycopg.Connection:
         """Get a new database connection with fresh OAuth token."""
         if self._use_databricks_apps:
-            # Databricks Apps: use service principal OAuth token
-            token = self._workspace_client.config.oauth_token().access_token
+            # Databricks Apps: use postgres SDK for credential generation
+            cred = self._workspace_client.postgres.generate_database_credential(
+                endpoint=self._endpoint_name
+            )
 
             return psycopg.connect(
                 host=self._postgres_host,
                 port=5432,
                 dbname=self._postgres_database,
                 user=self._postgres_username,
-                password=token,
+                password=cred.token,
                 sslmode="require",
             )
         else:
@@ -90,7 +102,7 @@ class LakebaseConnectionFactory:
             from inventory_demo.config import _token_manager
 
             token = _token_manager.get_token(
-                instance_name=self._local_settings.lakebase.instance_name,
+                endpoint_name=self._endpoint_name,
                 workspace_host=self._local_settings.databricks.host,
             )
 

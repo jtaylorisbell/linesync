@@ -28,12 +28,18 @@ sync:
 
 # Variables with defaults (can be overridden per target)
 variables:
-  lakebase_instance:
-    description: Lakebase instance name for OAuth
-    default: buildathon-isbell
+  lakebase_project_id:
+    description: Lakebase project ID
+    default: linesync
+  lakebase_branch_id:
+    description: Lakebase branch ID
+    default: main
+  lakebase_endpoint_id:
+    description: Lakebase endpoint ID
+    default: default
   lakebase_database:
     description: Lakebase database name
-    default: databricks_postgres
+    default: postgres
   lakebase_catalog:
     description: Unity Catalog name for Lakebase instance
     default: buildathon_isbell_pg_catalog

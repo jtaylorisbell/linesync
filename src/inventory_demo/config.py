@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import ClassVar
@@ -20,7 +19,7 @@ class OAuthTokenManager:
     _instance: ClassVar["OAuthTokenManager | None"] = None
     _token: str | None = None
     _expires_at: datetime | None = None
-    _instance_name: str | None = None
+    _endpoint_name: str | None = None
 
     def __new__(cls) -> "OAuthTokenManager":
         if cls._instance is None:
@@ -29,29 +28,30 @@ class OAuthTokenManager:
 
     def get_token(
         self,
-        instance_name: str,
+        endpoint_name: str,
         workspace_host: str | None = None,
         force_refresh: bool = False,
     ) -> str | None:
         """Get a valid OAuth token, refreshing if necessary.
 
         Args:
-            instance_name: The Lakebase instance name
+            endpoint_name: The Lakebase endpoint resource name
+                (e.g. projects/linesync/branches/main/endpoints/default)
             workspace_host: The Databricks workspace host
             force_refresh: Force token refresh even if not expired
 
         Returns:
             OAuth token string, or None if generation fails
         """
-        if not instance_name:
-            logger.debug("no_instance_name_provided")
+        if not endpoint_name:
+            logger.debug("no_endpoint_name_provided")
             return None
 
         # Check if we have a valid cached token (with 5 min buffer)
         if (
             not force_refresh
             and self._token
-            and self._instance_name == instance_name
+            and self._endpoint_name == endpoint_name
             and self._expires_at
             and datetime.now() < self._expires_at - timedelta(minutes=5)
         ):
@@ -61,21 +61,18 @@ class OAuthTokenManager:
         try:
             from databricks.sdk import WorkspaceClient
 
-            logger.info("generating_oauth_token", instance=instance_name, workspace=workspace_host)
+            logger.info("generating_oauth_token", endpoint=endpoint_name, workspace=workspace_host)
             w = WorkspaceClient(host=workspace_host) if workspace_host else WorkspaceClient()
-            cred = w.database.generate_database_credential(
-                request_id=str(uuid.uuid4()),
-                instance_names=[instance_name],
-            )
+            cred = w.postgres.generate_database_credential(endpoint=endpoint_name)
 
             self._token = cred.token
-            self._instance_name = instance_name
+            self._endpoint_name = endpoint_name
             # Tokens expire after 1 hour, we'll refresh at 55 minutes
             self._expires_at = datetime.now() + timedelta(minutes=55)
 
             logger.info(
                 "oauth_token_generated",
-                instance=instance_name,
+                endpoint=endpoint_name,
                 expires_at=self._expires_at.isoformat(),
             )
             return self._token
@@ -122,14 +119,19 @@ class LakebaseSettings(BaseSettings):
 
     host: str = "localhost"
     port: int = 5432
-    database: str = "inventory_demo"
+    database: str = "postgres"
     user: str = "lakebase"
     password: str = ""
     sslmode: str = "require"
-    # Lakebase instance name for OAuth token generation
-    instance_name: str = ""
-    # Set to True to use automatic OAuth token generation
-    use_oauth: bool = True
+    # Lakebase Autoscaling resource identifiers
+    project_id: str = "linesync"
+    branch_id: str = "main"
+    endpoint_id: str = "default"
+
+    @property
+    def endpoint_name(self) -> str:
+        """Full Lakebase endpoint resource name."""
+        return f"projects/{self.project_id}/branches/{self.branch_id}/endpoints/{self.endpoint_id}"
 
     def get_password(self, workspace_host: str | None = None) -> str:
         """Get password, auto-generating OAuth token if needed.
@@ -144,13 +146,13 @@ class LakebaseSettings(BaseSettings):
         if self.password:
             return self.password
 
-        # Try to generate OAuth token if instance_name is configured
-        if self.use_oauth and self.instance_name:
+        # Try to generate OAuth token using endpoint_name
+        if self.project_id:
             if workspace_host is None:
                 databricks = DatabricksSettings()
                 workspace_host = databricks.host or None
             token = _token_manager.get_token(
-                instance_name=self.instance_name,
+                endpoint_name=self.endpoint_name,
                 workspace_host=workspace_host,
             )
             if token:
@@ -240,24 +242,24 @@ def get_settings() -> Settings:
 
 
 def refresh_oauth_token(
-    instance_name: str | None = None, workspace_host: str | None = None
+    endpoint_name: str | None = None, workspace_host: str | None = None
 ) -> str | None:
     """Force refresh the OAuth token.
 
     Args:
-        instance_name: Lakebase instance name. If None, uses configured instance_name.
+        endpoint_name: Lakebase endpoint resource name. If None, uses configured settings.
         workspace_host: Databricks workspace host. If None, uses DatabricksSettings.
 
     Returns:
         New OAuth token, or None if refresh fails
     """
     settings = get_settings()
-    if instance_name is None:
-        instance_name = settings.lakebase.instance_name
+    if endpoint_name is None:
+        endpoint_name = settings.lakebase.endpoint_name
     if workspace_host is None:
         workspace_host = settings.databricks.host or None
     return _token_manager.get_token(
-        instance_name=instance_name,
+        endpoint_name=endpoint_name,
         workspace_host=workspace_host,
         force_refresh=True,
     )

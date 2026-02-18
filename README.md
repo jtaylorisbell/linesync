@@ -16,7 +16,7 @@ A barcode-based inventory intake and consumption demo for manufacturing intralog
 |-----------|------------|
 | Frontend | React + TypeScript + Vite |
 | Backend | FastAPI (Python) |
-| Database | Databricks Lakebase (Managed PostgreSQL) |
+| Database | Databricks Lakebase Autoscaling (Managed PostgreSQL) |
 | AI/Vision | Databricks Foundation Model (GPT-5) |
 | Analytics | Delta Live Tables (Bronze/Silver/Gold) |
 | Deployment | Databricks Apps |
@@ -30,7 +30,10 @@ uv sync
 
 # Copy and configure environment
 cp .env.example .env
-# Edit .env with your Lakebase connection details
+# Edit .env with your Databricks workspace host and user email
+
+# Provision Lakebase infrastructure and write connection details to .env
+uv run inventory-demo provision --write-env
 
 # Initialize database tables
 uv run inventory-demo init-db
@@ -41,6 +44,62 @@ uv run uvicorn inventory_demo.api.main:app --reload --port 8000
 # Run the frontend (in another terminal)
 cd frontend && npm install && npm run dev
 ```
+
+## Deployment (Databricks Apps)
+
+### Prerequisites
+
+- [Databricks CLI](https://docs.databricks.com/dev-tools/cli/install.html) installed and configured
+- Workspace with Lakebase, Databricks Apps, Unity Catalog, and Foundation Model APIs enabled
+- Python 3.11+ with `uv`
+
+### 1. Provision Lakebase Autoscaling
+
+```bash
+cp .env.example .env
+# Edit .env with DATABRICKS_HOST and USER_EMAIL
+
+uv sync
+uv run inventory-demo provision --write-env
+```
+
+This creates a Lakebase project, branch, endpoint, and user role, then writes the connection details to `.env`.
+
+### 2. Initialize Database
+
+```bash
+uv run inventory-demo init-db
+uv run inventory-demo status       # verify connection
+```
+
+### 3. Configure and Deploy the Bundle
+
+Update `databricks.yml` variables to match your workspace (project ID, catalogs, workspace profile), then:
+
+```bash
+databricks bundle validate -t dev
+databricks bundle deploy -t dev
+```
+
+The frontend is built automatically by Databricks Apps during deployment.
+
+### 4. Grant App Permissions
+
+The deployed app runs as its own service principal, which needs table access:
+
+```bash
+uv run inventory-demo grant-app-access inventory-demo-dev
+```
+
+### 5. Access the App
+
+```bash
+databricks apps get inventory-demo-dev | grep url
+```
+
+Or find it in the Databricks UI under **Compute > Apps**.
+
+> For the full deployment guide including DLT pipeline setup, troubleshooting, and production considerations, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Documentation
 
@@ -68,6 +127,7 @@ warehouse-mgmt/
 │   │   ├── postgres.py      # Lakebase operations
 │   │   └── schemas.py       # SQLAlchemy ORM models
 │   ├── config.py            # Settings management
+│   ├── infra.py             # Lakebase provisioner
 │   └── cli.py               # CLI commands
 ├── frontend/                 # React frontend
 │   └── src/
@@ -95,6 +155,9 @@ Generate test barcodes at [barcode.tec-it.com](https://barcode.tec-it.com/en/Cod
 ## CLI Commands
 
 ```bash
+# Provision Lakebase infrastructure (project, branch, endpoint, role)
+uv run inventory-demo provision --write-env
+
 # Initialize database tables (creates schema from scratch)
 uv run inventory-demo init-db
 
@@ -150,7 +213,3 @@ This is a demo application. For production use, consider:
 - Implementing idempotency keys for event creation
 - Adding comprehensive error handling and retry logic
 - Setting up monitoring and alerting
-
-## License
-
-Internal demo - Databricks confidential.

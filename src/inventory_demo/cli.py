@@ -19,7 +19,7 @@ def get_local_connection() -> psycopg.Connection:
     """Get a database connection using local credentials."""
     settings = get_settings()
     token = _token_manager.get_token(
-        instance_name=settings.lakebase.instance_name,
+        endpoint_name=settings.lakebase.endpoint_name,
         workspace_host=settings.databricks.host,
     )
     return psycopg.connect(
@@ -30,6 +30,89 @@ def get_local_connection() -> psycopg.Connection:
         password=token,
         sslmode="require",
     )
+
+
+@app.command()
+def provision(
+    project_id: str = typer.Option("linesync", help="Lakebase project ID"),
+    branch_id: str = typer.Option("main", help="Lakebase branch ID"),
+    endpoint_id: str = typer.Option("default", help="Lakebase endpoint ID"),
+    write_env: bool = typer.Option(False, "--write-env", help="Write connection details to .env"),
+):
+    """Provision Lakebase Autoscaling infrastructure (project, branch, endpoint, role)."""
+    from inventory_demo.infra import LakebaseProvisioner
+
+    settings = get_settings()
+    user_email = settings.user.email
+    if not user_email:
+        console.print("[red]Set USER_EMAIL in .env to provision infrastructure.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[blue]Provisioning Lakebase Autoscaling for [bold]{user_email}[/bold]...[/blue]\n")
+
+    try:
+        provisioner = LakebaseProvisioner()
+        result = provisioner.provision_all(
+            user_email=user_email,
+            project_id=project_id,
+            branch_id=branch_id,
+            endpoint_id=endpoint_id,
+        )
+
+        console.print(Panel.fit(
+            f"[bold]Project:[/bold]  {result.project_name}\n"
+            f"[bold]Branch:[/bold]   {result.branch_name}\n"
+            f"[bold]Endpoint:[/bold] {result.endpoint_name}\n"
+            f"[bold]Host:[/bold]     {result.host}\n"
+            f"[bold]Database:[/bold] {result.database}",
+            title="Lakebase Provisioned",
+        ))
+
+        if write_env:
+            _write_env_file(result, project_id, branch_id, endpoint_id, user_email)
+            console.print("\n[green]Updated .env with connection details.[/green]")
+
+        console.print("\n[green]Provisioning complete![/green]")
+
+    except Exception as e:
+        console.print(f"[red]Provisioning failed: {e}[/red]")
+        raise typer.Exit(1)
+
+
+def _write_env_file(result, project_id: str, branch_id: str, endpoint_id: str, user_email: str):
+    """Update .env file with provisioned connection details."""
+    from pathlib import Path
+
+    env_path = Path(".env")
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text().splitlines()
+
+    updates = {
+        "LAKEBASE_HOST": result.host,
+        "LAKEBASE_DATABASE": result.database,
+        "LAKEBASE_USER": user_email,
+        "LAKEBASE_PROJECT_ID": project_id,
+        "LAKEBASE_BRANCH_ID": branch_id,
+        "LAKEBASE_ENDPOINT_ID": endpoint_id,
+    }
+
+    # Update existing lines or append new ones
+    seen = set()
+    new_lines = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in updates:
+            new_lines.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            new_lines.append(line)
+
+    for key, value in updates.items():
+        if key not in seen:
+            new_lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(new_lines) + "\n")
 
 
 @app.command()
@@ -134,9 +217,9 @@ FROM latest WHERE rn = 1;
         cur.close()
         conn.close()
 
-        console.print("[green]✓ Database tables initialized successfully![/green]")
+        console.print("[green]Database tables initialized successfully![/green]")
     except Exception as e:
-        console.print(f"[red]✗ Error initializing database: {e}[/red]")
+        console.print(f"[red]Error initializing database: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -155,7 +238,7 @@ def clear_db(
 
     if not force:
         confirm = typer.confirm(
-            "\n⚠️  This will DELETE ALL DATA from scan_events and "
+            "\nThis will DELETE ALL DATA from scan_events and "
             "replenishment_signals. Continue?"
         )
         if not confirm:
@@ -174,9 +257,9 @@ def clear_db(
         cur.close()
         conn.close()
 
-        console.print("[green]✓ All data cleared successfully![/green]")
+        console.print("[green]All data cleared successfully![/green]")
     except Exception as e:
-        console.print(f"[red]✗ Error clearing database: {e}[/red]")
+        console.print(f"[red]Error clearing database: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -277,12 +360,12 @@ def migrate():
         conn.close()
 
         if migrations_applied:
-            console.print(f"[green]✓ Migrations applied: {', '.join(migrations_applied)}[/green]")
+            console.print(f"[green]Migrations applied: {', '.join(migrations_applied)}[/green]")
         else:
-            console.print("[green]✓ No migrations needed - database is up to date[/green]")
+            console.print("[green]No migrations needed - database is up to date[/green]")
 
     except Exception as e:
-        console.print(f"[red]✗ Error running migration: {e}[/red]")
+        console.print(f"[red]Error running migration: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -292,6 +375,8 @@ def grant_app_access(
         "inventory-demo-dev",
         help="Name of the Databricks App to grant access to"
     ),
+    project_id: str = typer.Option("linesync", help="Lakebase project ID"),
+    branch_id: str = typer.Option("main", help="Lakebase branch ID"),
 ):
     """Grant table access to a Databricks App's service principal.
 
@@ -300,6 +385,8 @@ def grant_app_access(
     """
     import subprocess
     import json
+    from databricks.sdk.service.postgres import RoleIdentityType
+    from inventory_demo.infra import LakebaseProvisioner
 
     settings = get_settings()
     console.print(Panel.fit(
@@ -322,17 +409,31 @@ def grant_app_access(
         sp_id = app_info.get("service_principal_client_id")
 
         if not sp_id:
-            console.print("[red]✗ Could not find service principal ID for app[/red]")
+            console.print("[red]Could not find service principal ID for app[/red]")
             raise typer.Exit(1)
 
         console.print(f"  Service Principal: [cyan]{sp_id}[/cyan]")
 
     except subprocess.CalledProcessError as e:
-        console.print(f"[red]✗ Error getting app info: {e.stderr}[/red]")
+        console.print(f"[red]Error getting app info: {e.stderr}[/red]")
         raise typer.Exit(1)
     except json.JSONDecodeError:
-        console.print("[red]✗ Error parsing app info[/red]")
+        console.print("[red]Error parsing app info[/red]")
         raise typer.Exit(1)
+
+    # Create Lakebase role for the service principal
+    console.print("\n[blue]Creating Lakebase role for service principal...[/blue]")
+    try:
+        provisioner = LakebaseProvisioner()
+        provisioner.ensure_role(
+            project_id=project_id,
+            branch_id=branch_id,
+            postgres_role=sp_id,
+            identity_type=RoleIdentityType.SERVICE_PRINCIPAL,
+        )
+        console.print(f"[green]Lakebase role created for {sp_id}[/green]")
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not create Lakebase role: {e}[/yellow]")
 
     console.print("\n[blue]Granting table permissions...[/blue]")
 
@@ -346,13 +447,13 @@ def grant_app_access(
         cur.close()
         conn.close()
 
-        console.print("[green]✓ Permissions granted successfully![/green]")
+        console.print("[green]Permissions granted successfully![/green]")
         console.print(f"\n  The app [cyan]{app_name}[/cyan] now has access to:")
-        console.print("    • scan_events")
-        console.print("    • replenishment_signals")
+        console.print("    - scan_events")
+        console.print("    - replenishment_signals")
 
     except Exception as e:
-        console.print(f"[red]✗ Error granting permissions: {e}[/red]")
+        console.print(f"[red]Error granting permissions: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -365,7 +466,7 @@ def status():
         f"[bold]Database:[/bold] {settings.lakebase.database}\n"
         f"[bold]Host:[/bold] {settings.lakebase.host}\n"
         f"[bold]User:[/bold] {settings.lakebase.user}\n"
-        f"[bold]OAuth:[/bold] {'Enabled' if settings.lakebase.use_oauth else 'Disabled'}",
+        f"[bold]Endpoint:[/bold] {settings.lakebase.endpoint_name}",
         title="Lakebase Connection",
     ))
 
@@ -375,7 +476,7 @@ def status():
         conn = get_local_connection()
         cur = conn.cursor()
         cur.execute("SELECT 1")
-        console.print("[green]✓ Database connected[/green]\n")
+        console.print("[green]Database connected[/green]\n")
 
         # Get table counts
         cur.execute("SELECT COUNT(*) FROM scan_events")
@@ -410,7 +511,7 @@ def status():
         )
 
     except Exception as e:
-        console.print(f"[red]✗ Error: {e}[/red]")
+        console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
 
 

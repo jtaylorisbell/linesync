@@ -12,3 +12,11 @@ command:
 env:
   - name: LOG_LEVEL
     value: "INFO"
+  - name: LAKEBASE_PROJECT_ID
+    value: "linesync"
+  - name: LAKEBASE_BRANCH_ID
+    value: "main"
+  - name: LAKEBASE_ENDPOINT_ID
+    value: "default"
+  - name: LAKEBASE_DATABASE
+    value: "postgres"
